@@ -1,5 +1,5 @@
 const CACHE = `dayly-shell-${new URL(self.location.href).searchParams.get('v') || 'local'}`
-const APP_SHELL = ['/', '/index.html', '/manifest.webmanifest', '/icon.svg']
+const APP_SHELL = ['/', '/index.html', '/manifest.webmanifest', '/icon.svg', '/logo.jpg']
 self.addEventListener('install', event => event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(APP_SHELL)).then(() => self.skipWaiting())))
 self.addEventListener('activate', event => event.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(key => key.startsWith('dayly-shell-') && key !== CACHE).map(key => caches.delete(key)))).then(() => self.clients.claim())))
 self.addEventListener('fetch', event => {
