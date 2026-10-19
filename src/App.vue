@@ -1,6 +1,6 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
-import { ArrowDownToLine, ArrowLeft, Compass, ArrowRight, PenLine, RefreshCw, Sparkles, CalendarDays, Check, CheckCircle2, ChevronRight, Clock3, CloudOff, Flag, Lightbulb, ListTodo, MessageCircle, Moon, MoreHorizontal, Plus, Settings2, Sun, Target, Trash2, Upload, X } from 'lucide-vue-next'
+import { ArrowDownToLine, ArrowLeft, Compass, NotebookPen, ArrowRight, PenLine, RefreshCw, Sparkles, CalendarDays, Check, CheckCircle2, ChevronRight, Clock3, CloudOff, Flag, Lightbulb, ListTodo, MessageCircle, Moon, Plus, Settings2, Sun, Target, Trash2, Upload, X } from 'lucide-vue-next'
 import { readAll, put, remove, replaceAll } from './db'
 
 const section = ref('today')
@@ -170,7 +170,7 @@ async function disconnectClaude() {
   await syncLocal()
   ping('Collegamento Claude revocato')
 }
-function switchTo(id) { section.value = id; showSheet.value = false }
+function switchTo(id) { section.value = id }
 function ping(message) { toast.value = message; window.setTimeout(() => { toast.value = '' }, 2600) }
 function beginAdd(type, extra = {}) {
   form.value = { title: '', date: todayKey, time: '', priority: false, done: false, progress: 0, color: '#E8E5FF', notes: '', ...extra }
@@ -228,9 +228,9 @@ async function saveWeeklyFocus() {
 const todayReview = computed(() => state.value.reviews.find(item => item.id === `day-${todayKey}`))
 
 /* ── stato e helper della nuova interfaccia mobile ── */
-const showSheet = ref(false)
 const selectedDate = ref(selectedDateDefault())
 const projectFilter = ref('all')
+const notesTab = ref('ideas')
 const isOnline = ref(navigator.onLine)
 
 window.addEventListener('online', () => { isOnline.value = true })
@@ -596,6 +596,8 @@ async function applyPending() {
   pendingSource.value = []
   if (sources.length) await clearProposals(sources)
   await refreshAndSync()
+  // dopo aver scritto, mostro il risultato invece di lasciarti dov'eri
+  if (!['today', 'calendar'].includes(section.value)) switchTo('today')
   ping(applied ? `${applied} ${applied === 1 ? 'cosa aggiunta' : 'cose aggiunte'}` : 'Non sono riuscito ad aggiungere nulla')
 }
 const showCapture = ref(false)
@@ -617,7 +619,7 @@ function openCapture() {
             <strong>Christian</strong>
           </div>
         </div>
-        <button class="round-btn" aria-label="Impostazioni e backup" @click="beginAdd('backup')">
+        <button class="round-btn" aria-label="Impostazioni" @click="switchTo('settings')">
           <Settings2 :size="19" />
           <span v-if="!cloudSettings()" class="badge"></span>
         </button>
@@ -633,7 +635,7 @@ function openCapture() {
             <h1 class="page-title">La tua giornata</h1>
           </div>
 
-          <button v-if="statusAlert" class="status-row" :class="`status-${syncState.tone}`" @click="proposalCount ? openClaudeProposals() : beginAdd('backup')">
+          <button v-if="statusAlert" class="status-row" :class="`status-${syncState.tone}`" @click="proposalCount ? openClaudeProposals() : switchTo('settings')">
             <component :is="syncState.icon" :size="15" />
             <span>{{ syncState.label }}</span>
             <ChevronRight :size="15" />
@@ -788,13 +790,18 @@ function openCapture() {
         </section>
 
         <!-- ─────────── IDEE ─────────── -->
-        <section v-else-if="section === 'ideas'" class="page">
+        <section v-else-if="section === 'notes'" class="page">
           <div class="page-head">
-            <p class="date-line">Prima che scappino</p>
-            <h1 class="page-title">Idee</h1>
-            <p class="page-sub">Appunti veloci, senza dover decidere subito cosa farne.</p>
+            <p class="date-line">Quello che non è un impegno</p>
+            <h1 class="page-title">Note</h1>
           </div>
 
+          <div class="chips">
+            <button class="chip" :class="{ on: notesTab === 'ideas' }" @click="notesTab = 'ideas'">Idee <span class="chip-count">{{ state.ideas.length }}</span></button>
+            <button class="chip" :class="{ on: notesTab === 'review' }" @click="notesTab = 'review'">Riepiloghi</button>
+          </div>
+
+          <template v-if="notesTab === 'ideas'">
           <div v-if="state.ideas.length" class="idea-grid">
             <article v-for="(idea, i) in state.ideas" :key="idea.id" class="idea-card" :class="`idea-tone-${i % 4}`">
               <div class="idea-top">
@@ -814,16 +821,9 @@ function openCapture() {
               <button class="btn" @click="beginAdd('idea')"><Plus :size="16" /> Annota un’idea</button>
             </div>
           </div>
-        </section>
+          </template>
 
-        <!-- ─────────── RIEPILOGHI ─────────── -->
-        <section v-else-if="section === 'review'" class="page">
-          <div class="page-head">
-            <p class="date-line">Un momento per te</p>
-            <h1 class="page-title">Riepiloghi</h1>
-            <p class="page-sub">Piccole riflessioni, senza giudizio.</p>
-          </div>
-
+          <template v-else>
           <section class="summary-card">
             <div>
               <h2>Questa settimana</h2>
@@ -851,19 +851,44 @@ function openCapture() {
             <textarea id="weekly-focus" class="notes" :value="lastReview?.focus || ''" placeholder="Per questa settimana, vorrei…"></textarea>
             <button class="btn btn-block" style="margin-top:14px" @click="saveWeeklyFocus">Salva il focus</button>
           </section>
+          </template>
         </section>
 
-        <!-- ─────────── ASSISTENTE ─────────── -->
-        <section v-else-if="section === 'assistant'" class="page">
+        <section v-else-if="section === 'settings'" class="page">
           <div class="page-head">
-            <p class="date-line">Un pensiero in più</p>
-            <h1 class="page-title">Claude</h1>
-            <p class="page-sub">Collega DAYLY a Claude per farti aiutare con agenda, progetti e idee.</p>
+            <p class="date-line">I tuoi dati, sempre tuoi</p>
+            <h1 class="page-title">Impostazioni</h1>
           </div>
 
           <section class="card">
+            <div class="card-head"><h2>Backup<span class="head-sub">Attività, progetti, idee e riflessioni stanno su questo dispositivo</span></h2></div>
+            <button class="backup-row" @click="exportBackup">
+              <span><ArrowDownToLine :size="18" /></span>
+              <div><strong>Esporta una copia</strong><small>Salva tutti i dati in un file JSON</small></div>
+              <ChevronRight :size="17" />
+            </button>
+            <button class="backup-row" @click="importInput?.click()">
+              <span><Upload :size="18" /></span>
+              <div><strong>Ripristina una copia</strong><small>Importa un backup DAYLY già salvato</small></div>
+              <ChevronRight :size="17" />
+            </button>
+            <input ref="importInput" type="file" accept="application/json,.json" hidden @change="importBackup" />
+
+            <div class="warn-box">
+              <CloudOff :size="16" />
+              <span>Su iPhone iOS può rimuovere i dati del sito se lo spazio è poco o se cancelli i dati di navigazione. Tieni una copia in File o iCloud Drive.</span>
+            </div>
+
+            <div class="meta-row">
+              <span>Attività<strong>{{ state.tasks.length }}</strong></span>
+              <span>Progetti<strong>{{ state.projects.length }}</strong></span>
+              <span>Idee<strong>{{ state.ideas.length }}</strong></span>
+            </div>
+          </section>
+
+          <section class="card">
             <div class="card-head">
-              <h2>Collegamento personale<span class="head-sub">{{ cloudSettings() ? syncLabel : 'Non ancora attivo' }}</span></h2>
+              <h2>Claude<span class="head-sub">{{ cloudSettings() ? syncLabel : 'Collegamento non ancora attivo' }}</span></h2>
               <span class="row-icon tone-violet"><MessageCircle :size="18" /></span>
             </div>
             <p class="project-note">DAYLY prepara un collegamento sicuro. I dati vengono cifrati prima di partire e le funzioni locali continuano a funzionare offline.</p>
@@ -922,13 +947,8 @@ function openCapture() {
             <div class="warn-box"><CloudOff :size="16" /><span>Il backup JSON è in chiaro e non contiene la chiave di sincronizzazione: conservalo con cura. Lo spazio Vercel Blob ha quote mensili incluse e può avere costi se le superi.</span></div>
           </section>
 
-          <section class="card">
-            <div class="card-head"><h2>Nella tua giornata</h2></div>
-            <div class="stat-row"><ListTodo :size="17" /><span>Attività</span><strong>{{ state.tasks.length }}</strong></div>
-            <div class="stat-row"><Target :size="17" /><span>Progetti</span><strong>{{ state.projects.length }}</strong></div>
-            <div class="stat-row"><Lightbulb :size="17" /><span>Idee</span><strong>{{ state.ideas.length }}</strong></div>
-          </section>
         </section>
+
       </main>
 
       <nav class="tabbar" aria-label="Navigazione principale">
@@ -936,42 +956,8 @@ function openCapture() {
         <button class="tab" :class="{ on: section === 'calendar' }" @click="switchTo('calendar')"><CalendarDays :size="20" /><span>Calendario</span><i class="tab-dot"></i></button>
         <button class="tab-add" aria-label="Scrivi quello che devi fare" @click="openCapture"><PenLine :size="24" /></button>
         <button class="tab" :class="{ on: section === 'projects' }" @click="switchTo('projects')"><Target :size="20" /><span>Progetti</span><i class="tab-dot"></i></button>
-        <button class="tab" :class="{ on: ['ideas', 'review', 'assistant'].includes(section) }" @click="showSheet = true"><MoreHorizontal :size="20" /><span>Altro</span><i class="tab-dot"></i></button>
+        <button class="tab" :class="{ on: section === 'notes' }" @click="switchTo('notes')"><NotebookPen :size="20" /><span>Note</span><i class="tab-dot"></i></button>
       </nav>
-    </div>
-
-    <!-- foglio «Altro» -->
-    <div v-if="showSheet" class="backdrop" @click.self="showSheet = false">
-      <section class="sheet">
-        <div class="sheet-grip"></div>
-        <div class="sheet-head">
-          <div>
-            <h2>Altro</h2>
-            <p>Il resto del tuo spazio.</p>
-          </div>
-          <button class="ghost-round" aria-label="Chiudi" @click="showSheet = false"><X :size="18" /></button>
-        </div>
-        <button class="sheet-link" @click="switchTo('ideas')">
-          <span class="row-icon tone-mint"><Lightbulb :size="18" /></span>
-          <div><strong>Idee</strong><small>Appunti veloci da riprendere con calma</small></div>
-          <ChevronRight class="go" :size="18" />
-        </button>
-        <button class="sheet-link" @click="switchTo('review')">
-          <span class="row-icon tone-violet"><Moon :size="18" /></span>
-          <div><strong>Riepiloghi</strong><small>La riflessione di oggi e il focus della settimana</small></div>
-          <ChevronRight class="go" :size="18" />
-        </button>
-        <button class="sheet-link" @click="switchTo('assistant')">
-          <span class="row-icon tone-sky"><MessageCircle :size="18" /></span>
-          <div><strong>Claude</strong><small>Collega l’assistente ai tuoi dati cifrati</small></div>
-          <ChevronRight class="go" :size="18" />
-        </button>
-        <button class="sheet-link" @click="showSheet = false; beginAdd('backup')">
-          <span class="row-icon tone-peach"><Settings2 :size="18" /></span>
-          <div><strong>Impostazioni e backup</strong><small>{{ cloudSettings() ? 'Locale · copia cifrata online' : 'Dati salvati solo su questo iPhone' }}</small></div>
-          <ChevronRight class="go" :size="18" />
-        </button>
-      </section>
     </div>
 
     <!-- scrivere quello che c'è da fare -->
@@ -1114,47 +1100,6 @@ function openCapture() {
     </div>
 
     <!-- foglio impostazioni e backup -->
-    <div v-if="modal === 'backup'" class="backdrop" @click.self="modal = null">
-      <section class="sheet">
-        <div class="sheet-grip"></div>
-        <div class="sheet-head">
-          <div>
-            <h2>Impostazioni e backup</h2>
-            <p>Attività, progetti, idee e riflessioni sono salvati su questo dispositivo.</p>
-          </div>
-          <button class="ghost-round" aria-label="Chiudi" @click="modal = null"><X :size="18" /></button>
-        </div>
-
-        <button class="backup-row" @click="exportBackup">
-          <span><ArrowDownToLine :size="18" /></span>
-          <div><strong>Esporta una copia</strong><small>Salva tutti i dati in un file JSON</small></div>
-          <ChevronRight :size="17" />
-        </button>
-        <button class="backup-row" @click="importInput?.click()">
-          <span><Upload :size="18" /></span>
-          <div><strong>Ripristina una copia</strong><small>Importa un backup DAYLY già salvato</small></div>
-          <ChevronRight :size="17" />
-        </button>
-        <input ref="importInput" type="file" accept="application/json,.json" hidden @change="importBackup" />
-        <button class="backup-row" @click="modal = null; switchTo('assistant')">
-          <span><MessageCircle :size="18" /></span>
-          <div><strong>Collegamento Claude</strong><small>{{ cloudSettings() ? syncLabel : 'Non ancora attivo' }}</small></div>
-          <ChevronRight :size="17" />
-        </button>
-
-        <div class="warn-box">
-          <CloudOff :size="16" />
-          <span>Su iPhone iOS può rimuovere i dati del sito se lo spazio è poco o se cancelli i dati di navigazione. Tieni una copia in File o iCloud Drive.</span>
-        </div>
-
-        <div class="meta-row">
-          <span>Attività<strong>{{ state.tasks.length }}</strong></span>
-          <span>Progetti<strong>{{ state.projects.length }}</strong></span>
-          <span>Idee<strong>{{ state.ideas.length }}</strong></span>
-        </div>
-      </section>
-    </div>
-
     <div v-if="toast" class="toast"><CheckCircle2 :size="17" /> {{ toast }}</div>
   </div>
 </template>

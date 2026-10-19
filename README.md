@@ -5,9 +5,9 @@ DAYLY è un’agenda personale in italiano, pensata prima di tutto per iPhone. S
 ## Cosa trovi nell’app
 
 - **Oggi:** la lista della giornata in un’unica schermata, con le priorità in cima e l’avanzamento.
-- **Calendario:** settimana flessibile, impegni fissi e attività libere.
+- **Calendario:** strip della settimana e la lista del giorno scelto.
 - **Progetti e obiettivi:** percentuale di completamento aggiornata manualmente.
-- **Idee, riepiloghi e focus settimanale.**
+- **Note:** idee da riprendere e riepiloghi (bilancio della sera, focus della settimana) in un’unica sezione a due schede.
 - **Offline:** le funzioni locali continuano a funzionare senza rete.
 - **Backup:** esportazione e ripristino di un file JSON.
 - **Scrivere la giornata:** il pulsante centrale con la matita apre un foglio dove si scrive in italiano, anche più cose insieme («oggi la spesa, chiamare Marco, domani alle 15 il dentista»). DAYLY riconosce date, orari, priorità e progetti, e la data citata vale anche per le cose che la seguono. Mostra l’anteprima e inserisce solo dopo conferma. Funziona offline e non chiama nessun servizio.
@@ -64,7 +64,7 @@ Il progetto usa `npm run build`, output `dist` e le funzioni in `api/`. La repos
 
 ## Collegare Claude
 
-1. Apri **Altro → Claude** in DAYLY e scegli **Attiva la sincronizzazione protetta**. DAYLY crea un identificativo e una chiave casuale, salva la chiave in IndexedDB e carica una copia cifrata.
+1. Apri **Impostazioni** in DAYLY (la rotella in alto a destra) e scegli **Attiva la sincronizzazione protetta**. DAYLY crea un identificativo e una chiave casuale, salva la chiave in IndexedDB e carica una copia cifrata.
 2. Premi **Genera codice temporaneo per Claude**. Il codice dura cinque minuti.
 3. In Claude apri **Impostazioni → Connettori → Aggiungi connettore personalizzato**, inserisci `https://dayly-delta.vercel.app/api/mcp` e avvia la connessione.
 4. Nella pagina di autorizzazione DAYLY incolla il codice temporaneo. Claude riceve permessi di lettura e scrittura; la pagina mostra i permessi prima di completare l’accesso.
@@ -100,7 +100,7 @@ Per una sola persona, con uno snapshot piccolo e un uso contenuto, i limiti incl
 
 ## Backup e limiti iOS
 
-Apri **Impostazioni e backup** per esportare o importare l’archivio JSON. L’importazione sostituisce i dati locali, preservando il collegamento cloud attivo.
+Apri **Impostazioni** (rotella in alto a destra) per esportare o importare l’archivio JSON. L’importazione sostituisce i dati locali, preservando il collegamento cloud attivo.
 
 IndexedDB rimane associato al browser/app sul dispositivo. iOS può rimuovere dati del sito o dell’app se vengono cancellati i dati di navigazione o in condizioni di spazio; non è un backup garantito. La copia Blob è opzionale e richiede internet. Per trasferire il collegamento su un altro iPhone serve il segreto personale, che non è incluso nell’esportazione JSON: conserva una copia sicura separata.
 
