@@ -7,8 +7,8 @@
     "dev": "vite --host 0.0.0.0",
     "build": "vite build",
     "preview": "vite preview --host 0.0.0.0",
-    "predev": "node scripts/materialize-logo.mjs",
-    "prebuild": "node scripts/materialize-logo.mjs"
+    "predev": "node scripts/materialize-icon.mjs",
+    "prebuild": "node scripts/materialize-icon.mjs"
   },
   "dependencies": {
     "idb": "^8.0.3",
