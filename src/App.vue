@@ -228,16 +228,28 @@ const todayReview = computed(() => state.value.reviews.find(item => item.id === 
 
 /* ── stato e helper della nuova interfaccia mobile ── */
 const showSheet = ref(false)
-const selectedDate = ref(todayKey)
-const todayFilter = ref('all')
+const selectedDate = ref(selectedDateDefault())
 const projectFilter = ref('all')
+const isOnline = ref(navigator.onLine)
 
-const filteredToday = computed(() => {
-  if (todayFilter.value === 'event') return appointments.value
-  if (todayFilter.value === 'free') return untimedTasks.value
-  if (todayFilter.value === 'priority') return priorities.value
-  return todayTasks.value
+window.addEventListener('online', () => { isOnline.value = true })
+window.addEventListener('offline', () => { isOnline.value = false })
+
+const openFree = computed(() => untimedTasks.value.filter(task => !task.done))
+const prioritySlots = computed(() => [0, 1, 2].map(index => priorities.value[index] || null))
+const nextAppointment = computed(() => {
+  const now = new Date()
+  const clock = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
+  const open = appointments.value.filter(task => !task.done)
+  return open.find(task => task.time >= clock) || open[0] || null
 })
+const syncState = computed(() => {
+  if (!isOnline.value) return { label: 'Offline · le funzioni locali restano attive', tone: 'peach', icon: CloudOff }
+  if (/ricarica|verificare/i.test(syncLabel.value)) return { label: 'Dati cambiati altrove · ricarica prima di modificare', tone: 'peach', icon: CloudOff }
+  if (cloudSettings()) return { label: syncLabel.value, tone: 'mint', icon: CheckCircle2 }
+  return { label: 'Salvato solo su questo iPhone', tone: 'violet', icon: CloudOff }
+})
+
 const filteredProjects = computed(() => {
   if (projectFilter.value === 'open') return state.value.projects.filter(p => Number(p.progress) < 100)
   if (projectFilter.value === 'done') return state.value.projects.filter(p => Number(p.progress) >= 100)
@@ -248,6 +260,36 @@ const selectedDayLabel = computed(() => selectedDate.value === todayKey ? 'Oggi'
 const monthLabel = computed(() => new Intl.DateTimeFormat('it-IT', { month: 'long', year: 'numeric' }).format(weekDays.value[3]))
 const quickAddLabel = computed(() => section.value === 'projects' ? 'Nuovo progetto' : section.value === 'ideas' ? 'Nuova idea' : 'Nuovo impegno')
 
+const appointmentGroup = {
+  id: 'time',
+  title: 'Appuntamenti',
+  sub: 'Impegni con un orario fisso',
+  cta: 'Aggiungi un appuntamento',
+  emptyTitle: 'Nessun appuntamento',
+  emptyText: 'Qui finisce tutto ciò che ha un’ora precisa. Va bene anche lasciare spazio vuoto.',
+  tone: 'sky',
+  icon: Clock3,
+}
+const freeGroup = {
+  id: 'free',
+  title: 'Quando vuoi',
+  sub: 'Attività senza orario, le sposti come viene',
+  cta: 'Aggiungi un’attività',
+  emptyTitle: 'Nessuna attività senza orario',
+  emptyText: 'Le attività senza orario restano libere: le fai quando capita, senza sentirti in ritardo.',
+  tone: 'violet',
+  icon: ListTodo,
+}
+const todayGroups = computed(() => [
+  { ...appointmentGroup, items: appointments.value, add: { date: todayKey, time: '09:00' } },
+  { ...freeGroup, items: untimedTasks.value, add: { date: todayKey } },
+])
+const selectedGroups = computed(() => [
+  { ...appointmentGroup, items: selectedTasks.value.filter(task => task.time), add: { date: selectedDate.value, time: '09:00' } },
+  { ...freeGroup, items: selectedTasks.value.filter(task => !task.time), add: { date: selectedDate.value } },
+])
+
+function selectedDateDefault() { return todayKey }
 function weekdayShort(date) { return new Intl.DateTimeFormat('it-IT', { weekday: 'short' }).format(date).slice(0, 3) }
 function longDate(date) { return new Intl.DateTimeFormat('it-IT', { weekday: 'long', day: 'numeric', month: 'long' }).format(date) }
 function shortMonth(value) { return new Intl.DateTimeFormat('it-IT', { day: 'numeric', month: 'short' }).format(new Date(value || Date.now())) }
@@ -257,11 +299,12 @@ function shiftWeek(step) {
   selectedDate.value = weekDays.value.some(day => keyDate(day) === todayKey) ? todayKey : keyDate(weekDays.value[0])
 }
 function taskKind(task) {
-  if (task.priority) return { label: 'Priorità', icon: Flag, tone: 'peach' }
-  if (task.time) return { label: 'Appuntamento', icon: Clock3, tone: 'sky' }
-  if (task.projectId) return { label: 'Traguardo', icon: Target, tone: 'mint' }
-  return { label: 'Attività', icon: ListTodo, tone: 'violet' }
+  return task.time
+    ? { label: 'Appuntamento', icon: Clock3, tone: 'sky' }
+    : { label: 'Quando vuoi', icon: ListTodo, tone: 'violet' }
 }
+function rowMeta(task) { return [formatTime(task.time), projectName(task.projectId)].filter(Boolean).join(' · ') }
+function slotLabel(index) { return ['Scegli la prima priorità', 'Scegli la seconda', 'Scegli la terza'][index] }
 function completedWord(count) { return Number(count) === 1 ? 'completata' : 'completate' }
 function quickAdd() {
   if (section.value === 'projects') return beginAdd('project')
@@ -299,101 +342,82 @@ function quickAdd() {
             <h1 class="page-title">La tua giornata</h1>
           </div>
 
-          <div class="tiles">
-            <button class="tile tile-violet" @click="todayFilter = 'all'">
-              <svg class="tile-spark" width="40" height="18" viewBox="0 0 40 18" fill="none" aria-hidden="true"><path d="M1 14 L8 8 L14 11 L21 3 L28 9 L39 2" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" /></svg>
-              <span class="tile-num">{{ todayTasks.length }}</span>
-              <span class="tile-foot">Oggi <ChevronRight :size="14" /></span>
-            </button>
-            <button class="tile tile-peach" @click="todayFilter = 'priority'">
-              <svg class="tile-spark" width="40" height="18" viewBox="0 0 40 18" fill="none" aria-hidden="true"><path d="M1 9 Q6 1 11 9 T21 9 T31 9 T39 5" stroke="currentColor" stroke-width="2" stroke-linecap="round" /></svg>
-              <span class="tile-num">{{ priorities.length }}<small style="font-size:16px">/3</small></span>
-              <span class="tile-foot">Priorità <ChevronRight :size="14" /></span>
-            </button>
-            <button class="tile tile-sky" @click="switchTo('projects')">
-              <svg class="tile-spark" width="40" height="18" viewBox="0 0 40 18" fill="none" aria-hidden="true"><path d="M1 16 L9 12 L17 13 L25 6 L32 8 L39 1" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" /></svg>
-              <span class="tile-num">{{ state.projects.length }}</span>
-              <span class="tile-foot">Progetti <ChevronRight :size="14" /></span>
-            </button>
-            <button class="tile tile-mint" @click="switchTo('ideas')">
-              <svg class="tile-spark" width="40" height="18" viewBox="0 0 40 18" fill="none" aria-hidden="true"><path d="M1 12 L7 14 L13 6 L20 10 L27 4 L33 7 L39 3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" /></svg>
-              <span class="tile-num">{{ state.ideas.length }}</span>
-              <span class="tile-foot">Idee <ChevronRight :size="14" /></span>
-            </button>
-          </div>
+          <button class="status-row" :class="`status-${syncState.tone}`" @click="beginAdd('backup')">
+            <component :is="syncState.icon" :size="15" />
+            <span>{{ syncState.label }}</span>
+            <ChevronRight :size="15" />
+          </button>
 
-          <section class="card progress-card">
-            <div class="row-between">
-              <div>
-                <span class="eyebrow">Oggi, fin qui</span>
-                <strong>{{ doneToday }} di {{ todayTasks.length }} {{ completedWord(doneToday) }}</strong>
+          <section class="card status-card">
+            <div class="ring" :style="{ '--p': `${progressToday}%` }"><span>{{ progressToday }}<small>%</small></span></div>
+            <div class="status-lines">
+              <strong>{{ doneToday }} di {{ todayTasks.length }} {{ completedWord(doneToday) }}</strong>
+              <div class="status-line">
+                <Clock3 :size="15" />
+                <span v-if="nextAppointment">Il prossimo alle <strong>{{ formatTime(nextAppointment.time) }}</strong>, {{ nextAppointment.title }}</span>
+                <span v-else>Nessun appuntamento in agenda</span>
               </div>
-              <div class="pct">{{ progressToday }}<small>%</small></div>
+              <div class="status-line">
+                <ListTodo :size="15" />
+                <span><strong>{{ openFree.length }}</strong> {{ openFree.length === 1 ? 'cosa' : 'cose' }} da fare quando vuoi</span>
+              </div>
             </div>
-            <div class="bar"><span :style="{ width: `${progressToday}%` }"></span></div>
           </section>
 
           <section class="card">
             <div class="card-head">
-              <h2>Le tre cose importanti<span class="head-sub">Scegli al massimo tre priorità al giorno</span></h2>
-              <button class="add-round" aria-label="Aggiungi una priorità" @click="beginAdd('task', { priority: true })"><Plus :size="17" /></button>
+              <h2>Le tre priorità<span class="head-sub">Le poche cose che vuoi portare a casa oggi</span></h2>
             </div>
-            <div v-if="priorities.length" class="list">
-              <button v-for="(task, i) in priorities" :key="task.id" class="row" :class="{ 'is-done': task.done }" @click="toggleTask(task)">
-                <span class="row-rank">0{{ i + 1 }}</span>
-                <span class="row-body">
-                  <span class="type-label label-peach">Priorità</span>
-                  <span class="row-title">{{ task.title }}</span>
-                  <span v-if="task.time || projectName(task.projectId)" class="row-meta">{{ [formatTime(task.time), projectName(task.projectId)].filter(Boolean).join(' · ') }}</span>
-                </span>
-                <span class="check" :class="{ on: task.done }"><Check :size="14" /></span>
-              </button>
-            </div>
-            <div v-else class="empty">
-              <span class="empty-art tone-peach"><Flag :size="22" /></span>
-              <strong>Nessuna priorità per oggi</strong>
-              <p>Le priorità sono le poche cose che vuoi davvero portare a casa. Scegline una per iniziare.</p>
-              <button class="btn" @click="beginAdd('task', { priority: true })"><Plus :size="16" /> Scegli una priorità</button>
+            <div class="list">
+              <template v-for="(task, index) in prioritySlots" :key="index">
+                <button v-if="task" class="row" :class="{ 'is-done': task.done }" @click="toggleTask(task)">
+                  <span class="row-rank">0{{ index + 1 }}</span>
+                  <span class="row-body">
+                    <span class="type-label" :class="`label-${taskKind(task).tone}`">{{ taskKind(task).label }}</span>
+                    <span class="row-title">{{ task.title }}</span>
+                    <span class="row-meta">{{ [formatTime(task.time) || 'Senza orario', projectName(task.projectId)].filter(Boolean).join(' · ') }}</span>
+                  </span>
+                  <span class="check" :class="{ on: task.done }"><Check :size="14" /></span>
+                </button>
+                <button v-else class="row row-slot" @click="beginAdd('task', { priority: true })">
+                  <span class="row-rank">0{{ index + 1 }}</span>
+                  <span class="row-body"><span class="row-title slot-title">{{ slotLabel(index) }}</span></span>
+                  <span class="slot-plus"><Plus :size="15" /></span>
+                </button>
+              </template>
             </div>
           </section>
 
-          <div class="chips">
-            <button class="chip" :class="{ on: todayFilter === 'all' }" @click="todayFilter = 'all'">Tutte <span class="chip-count">{{ todayTasks.length }}</span></button>
-            <button class="chip" :class="{ on: todayFilter === 'event' }" @click="todayFilter = 'event'">Appuntamenti <span class="chip-count">{{ appointments.length }}</span></button>
-            <button class="chip" :class="{ on: todayFilter === 'free' }" @click="todayFilter = 'free'">Senza orario <span class="chip-count">{{ untimedTasks.length }}</span></button>
-            <button class="chip" :class="{ on: todayFilter === 'priority' }" @click="todayFilter = 'priority'">Priorità <span class="chip-count">{{ priorities.length }}</span></button>
-          </div>
-
-          <section class="card">
+          <section v-for="group in todayGroups" :key="group.id" class="card">
             <div class="card-head">
-              <h2>Il ritmo di oggi<span class="head-sub">Tocca una riga per completarla</span></h2>
-              <button class="add-round" aria-label="Aggiungi un impegno" @click="beginAdd('task', { date: todayKey })"><Plus :size="17" /></button>
+              <h2>{{ group.title }}<span class="head-sub">{{ group.sub }}</span></h2>
+              <button class="add-round" :aria-label="group.cta" @click="beginAdd('task', group.add)"><Plus :size="17" /></button>
             </div>
-            <div v-if="filteredToday.length" class="list">
-              <button v-for="task in filteredToday" :key="task.id" class="row" :class="{ 'is-done': task.done }" @click="toggleTask(task)">
+            <div v-if="group.items.length" class="list">
+              <button v-for="task in group.items" :key="task.id" class="row" :class="{ 'is-done': task.done }" @click="toggleTask(task)">
                 <span class="row-icon" :class="`tone-${taskKind(task).tone}`"><component :is="taskKind(task).icon" :size="18" /></span>
                 <span class="row-body">
-                  <span class="type-label" :class="`label-${taskKind(task).tone}`">{{ taskKind(task).label }}</span>
+                  <span v-if="task.priority" class="type-line"><span class="pill-priority"><Flag :size="10" /> Priorità</span></span>
                   <span class="row-title">{{ task.title }}</span>
-                  <span class="row-meta">{{ [formatTime(task.time) || 'Quando vuoi', projectName(task.projectId)].filter(Boolean).join(' · ') }}</span>
+                  <span v-if="rowMeta(task)" class="row-meta">{{ rowMeta(task) }}</span>
                 </span>
                 <span class="check" :class="{ on: task.done }"><Check :size="14" /></span>
               </button>
             </div>
             <div v-else class="empty">
-              <span class="empty-art tone-violet"><Clock3 :size="22" /></span>
-              <strong>{{ todayTasks.length ? 'Niente in questo filtro' : 'La giornata è ancora bianca' }}</strong>
-              <p>{{ todayTasks.length ? 'Prova un altro filtro qui sopra per vedere il resto della giornata.' : 'Aggiungi un appuntamento con un orario, oppure un’attività da fare quando vuoi.' }}</p>
-              <button class="btn" @click="beginAdd('task', { date: todayKey })"><Plus :size="16" /> Aggiungi un impegno</button>
+              <span class="empty-art" :class="`tone-${group.tone}`"><component :is="group.icon" :size="22" /></span>
+              <strong>{{ group.emptyTitle }}</strong>
+              <p>{{ group.emptyText }}</p>
+              <button class="btn" @click="beginAdd('task', group.add)"><Plus :size="16" /> {{ group.cta }}</button>
             </div>
           </section>
 
           <section class="card">
             <div class="card-head">
-              <h2>Il tuo filo conduttore<span class="head-sub">Il focus di questa settimana</span></h2>
+              <h2>Il focus della settimana<span class="head-sub">L’intenzione a cui tornare quando la giornata si affolla</span></h2>
               <button class="ghost-round" aria-label="Apri i riepiloghi" @click="switchTo('review')"><ChevronRight :size="18" /></button>
             </div>
-            <p class="project-note">{{ lastReview?.focus || 'Non hai ancora scelto un focus. Una parola basta: è il promemoria a cui tornare quando la giornata si affolla.' }}</p>
+            <p class="project-note">{{ lastReview?.focus || 'Non ne hai ancora scelto uno. Basta una parola: la ritrovi qui ogni giorno.' }}</p>
             <button class="add-line" @click="switchTo('review')">{{ lastReview?.focus ? 'Rivedi il focus' : 'Scegli il tuo focus' }}</button>
           </section>
 
@@ -403,7 +427,6 @@ function quickAdd() {
           </section>
         </section>
 
-        <!-- ─────────── CALENDARIO ─────────── -->
         <section v-else-if="section === 'calendar'" class="page">
           <div class="page-head">
             <p class="date-line">{{ monthLabel }}</p>
@@ -426,44 +449,39 @@ function quickAdd() {
                 <i class="dot" :class="{ 'dot-hidden': !tasksOn(day).length }"></i>
               </button>
             </div>
+            <p class="cal-caption">{{ selectedDayLabel }} · {{ selectedTasks.length ? `${selectedTasks.filter(t => t.done).length} di ${selectedTasks.length} ${completedWord(selectedTasks.filter(t => t.done).length)}` : 'giornata libera' }}</p>
           </section>
 
-          <section class="card">
+          <section v-for="group in selectedGroups" :key="group.id" class="card">
             <div class="card-head">
-              <h2>{{ selectedDayLabel }}<span class="head-sub">{{ selectedTasks.length ? `${selectedTasks.filter(t => t.done).length} di ${selectedTasks.length} ${completedWord(selectedTasks.filter(t => t.done).length)}` : 'Nessun impegno per ora' }}</span></h2>
-              <button class="add-round" aria-label="Aggiungi in questo giorno" @click="beginAdd('task', { date: selectedDate })"><Plus :size="17" /></button>
+              <h2>{{ group.title }}<span class="head-sub">{{ group.sub }}</span></h2>
+              <button class="add-round" :aria-label="group.cta" @click="beginAdd('task', group.add)"><Plus :size="17" /></button>
             </div>
-            <div v-if="selectedTasks.length" class="list">
-              <button v-for="task in selectedTasks" :key="task.id" class="row" :class="{ 'is-done': task.done }" @click="toggleTask(task)">
+            <div v-if="group.items.length" class="list">
+              <button v-for="task in group.items" :key="task.id" class="row" :class="{ 'is-done': task.done }" @click="toggleTask(task)">
                 <span class="row-icon" :class="`tone-${taskKind(task).tone}`"><component :is="taskKind(task).icon" :size="18" /></span>
                 <span class="row-body">
-                  <span class="type-label" :class="`label-${taskKind(task).tone}`">{{ taskKind(task).label }}</span>
+                  <span v-if="task.priority" class="type-line"><span class="pill-priority"><Flag :size="10" /> Priorità</span></span>
                   <span class="row-title">{{ task.title }}</span>
-                  <span class="row-meta">{{ [formatTime(task.time) || 'Quando vuoi', projectName(task.projectId)].filter(Boolean).join(' · ') }}</span>
+                  <span v-if="rowMeta(task)" class="row-meta">{{ rowMeta(task) }}</span>
                 </span>
                 <span class="check" :class="{ on: task.done }"><Check :size="14" /></span>
               </button>
             </div>
             <div v-else class="empty">
-              <span class="empty-art tone-sky"><CalendarDays :size="22" /></span>
-              <strong>Giornata libera</strong>
-              <p>Gli impegni con un orario finiscono in agenda; quelli senza restano flessibili e li sistemi quando vuoi.</p>
-              <button class="btn" @click="beginAdd('task', { date: selectedDate })"><Plus :size="16" /> Aggiungi un impegno</button>
+              <span class="empty-art" :class="`tone-${group.tone}`"><component :is="group.icon" :size="22" /></span>
+              <strong>{{ group.emptyTitle }}</strong>
+              <p>{{ group.emptyText }}</p>
+              <button class="btn" @click="beginAdd('task', group.add)"><Plus :size="16" /> {{ group.cta }}</button>
             </div>
-          </section>
-
-          <section class="card">
-            <div class="card-head"><h2>La settimana<span class="head-sub">{{ weekTasks.filter(t => t.done).length }} {{ completedWord(weekTasks.filter(t => t.done).length) }} su {{ weekTasks.length }}</span></h2></div>
-            <div class="bar"><span :style="{ width: `${weekTasks.length ? Math.round(weekTasks.filter(t => t.done).length / weekTasks.length * 100) : 0}%` }"></span></div>
           </section>
         </section>
 
-        <!-- ─────────── PROGETTI ─────────── -->
         <section v-else-if="section === 'projects'" class="page">
           <div class="page-head">
             <p class="date-line">Un passo alla volta</p>
             <h1 class="page-title">Progetti</h1>
-            <p class="page-sub">Le cose che crescono nel tempo. Sposta il cursore per aggiornare il progresso.</p>
+            <p class="page-sub">Le cose che crescono nel tempo. La percentuale la aggiorni tu, con il cursore.</p>
           </div>
 
           <div v-if="state.projects.length" class="chips">
@@ -566,17 +584,17 @@ function quickAdd() {
 
           <section class="card">
             <div class="card-head">
-              <h2>Com’è andata, davvero?<span class="head-sub">{{ longDate(today) }} · {{ doneToday }} {{ doneToday === 1 ? 'cosa portata' : 'cose portate' }} a termine</span></h2>
+              <h2>Il bilancio di stasera<span class="head-sub">{{ longDate(today) }} · {{ doneToday }} {{ doneToday === 1 ? 'cosa portata' : 'cose portate' }} a termine</span></h2>
               <span class="row-icon tone-violet"><Moon :size="18" /></span>
             </div>
-            <label class="field-label" for="daily-notes">Cosa vuoi ricordare di oggi?</label>
+            <label class="field-label" for="daily-notes">Cosa vuoi ricordare di oggi? Anche una parola basta.</label>
             <textarea id="daily-notes" class="notes" :value="todayReview?.notes || ''" placeholder="Una cosa che è andata bene…"></textarea>
             <button class="btn btn-block" style="margin-top:14px" @click="saveDailyReview">Salva il riepilogo</button>
           </section>
 
           <section class="card">
             <div class="card-head">
-              <h2>Qual è il tuo filo conduttore?<span class="head-sub">Una parola o un’intenzione per la settimana</span></h2>
+              <h2>Il focus della settimana<span class="head-sub">Una parola o un’intenzione a cui tornare</span></h2>
               <span class="row-icon tone-mint"><Compass :size="18" /></span>
             </div>
             <label class="field-label" for="weekly-focus">Il mio focus della settimana</label>
@@ -599,6 +617,11 @@ function quickAdd() {
               <span class="row-icon tone-violet"><MessageCircle :size="18" /></span>
             </div>
             <p class="project-note">DAYLY prepara un collegamento sicuro. I dati vengono cifrati prima di partire e le funzioni locali continuano a funzionare offline.</p>
+            <div class="flow">
+              <div class="flow-step"><span class="flow-num">1</span><div><strong>Legge</strong><small>Agenda, progetti e idee che hai sincronizzato</small></div></div>
+              <div class="flow-step"><span class="flow-num">2</span><div><strong>Propone</strong><small>Ti mostra l’elenco preciso delle modifiche</small></div></div>
+              <div class="flow-step"><span class="flow-num">3</span><div><strong>Applica</strong><small>Solo dopo che hai detto di procedere</small></div></div>
+            </div>
 
             <button class="btn btn-block" style="margin-top:16px" :disabled="cloudBusy" @click="connectClaude">
               {{ cloudBusy ? 'Preparo il collegamento…' : cloudSettings() ? 'Genera codice temporaneo' : 'Attiva la sincronizzazione protetta' }}
@@ -631,11 +654,18 @@ function quickAdd() {
           </section>
 
           <section class="card">
+            <div class="card-head"><h2>Cosa può cambiare<span class="head-sub">Tutto il resto si fa qui dentro, a mano</span></h2></div>
+            <div class="note-line"><Check :size="16" /><span>Aggiungere un’attività o spostarla a un altro giorno.</span></div>
+            <div class="note-line"><Check :size="16" /><span>Segnare un’attività come completata.</span></div>
+            <div class="note-line"><Check :size="16" /><span>Aggiornare la percentuale di un progetto.</span></div>
+          </section>
+
+          <section class="card">
             <div class="card-head"><h2>Le scelte restano tue</h2></div>
             <div class="note-line"><CheckCircle2 :size="16" /><span>I dati vengono cifrati prima della sincronizzazione.</span></div>
             <div class="note-line"><CheckCircle2 :size="16" /><span>Nessuna chiave API a pagamento dentro l’app.</span></div>
             <div class="note-line"><CheckCircle2 :size="16" /><span>Puoi revocare il collegamento da qui, quando vuoi.</span></div>
-            <div class="warn-box"><CloudOff :size="16" /><span>Lo spazio Vercel Blob ha quote mensili incluse e può avere costi se le superi, secondo il tuo piano Vercel.</span></div>
+            <div class="warn-box"><CloudOff :size="16" /><span>Il backup JSON è in chiaro e non contiene la chiave di sincronizzazione: conservalo con cura. Lo spazio Vercel Blob ha quote mensili incluse e può avere costi se le superi.</span></div>
           </section>
 
           <section class="card">

@@ -894,3 +894,121 @@ h1, h2, h3, p { margin: 0; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }
+
+/* ──────────────────────────────────────────────
+   stato dei dati e sintesi della giornata
+   ────────────────────────────────────────────── */
+.status-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 11px 15px;
+  border-radius: 99px;
+  font-size: 12.5px;
+  font-weight: 600;
+  text-align: left;
+}
+.status-row > span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.status-row svg { flex: none; }
+.status-violet { background: var(--violet-bg); color: #3B2F94; }
+.status-mint { background: var(--mint-bg); color: #275F3F; }
+.status-peach { background: var(--peach-bg); color: #8E4316; }
+
+.status-card { display: flex; align-items: center; gap: 18px; }
+.ring {
+  width: 80px; height: 80px;
+  flex: none;
+  border-radius: 50%;
+  background: conic-gradient(var(--pill) var(--p, 0%), var(--line) 0);
+  display: grid;
+  place-items: center;
+}
+.ring > span {
+  width: 62px; height: 62px;
+  border-radius: 50%;
+  background: var(--surface);
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  font-family: Manrope, sans-serif;
+  font-size: 20px;
+  font-weight: 800;
+  letter-spacing: -.8px;
+}
+.ring small { font-size: 11px; font-weight: 700; color: var(--muted); }
+.status-lines { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.status-lines > strong { font-size: 15.5px; font-weight: 700; letter-spacing: -.2px; }
+.status-line {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+.status-line svg { flex: none; margin-top: 1px; }
+.status-line strong { color: var(--ink); font-weight: 700; }
+
+/* slot priorità ancora liberi */
+.row-slot .row-rank { color: #CDCDE0; }
+.slot-title { color: var(--muted); font-weight: 500; }
+.slot-plus {
+  width: 26px; height: 26px;
+  flex: none;
+  border-radius: 50%;
+  border: 1.5px dashed #D5D5E6;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+}
+
+/* pastiglia priorità sulle righe */
+.type-line { display: flex; align-items: center; gap: 7px; margin-bottom: 3px; }
+.type-line .type-label { margin-bottom: 0; }
+.pill-priority {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  background: var(--peach-bg);
+  color: var(--peach);
+  border-radius: 99px;
+  padding: 2px 8px 2px 6px;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: .6px;
+  text-transform: uppercase;
+}
+
+.cal-caption {
+  margin-top: 14px;
+  padding-top: 13px;
+  border-top: 1px solid var(--line);
+  font-size: 12.5px;
+  color: var(--muted);
+  text-align: center;
+}
+
+/* cosa fa Claude, in tre passi */
+.flow { display: flex; flex-direction: column; gap: 2px; margin-top: 16px; }
+.flow-step { display: flex; align-items: flex-start; gap: 12px; padding: 9px 0; }
+.flow-num {
+  width: 26px; height: 26px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--violet-bg);
+  color: var(--violet);
+  display: grid;
+  place-items: center;
+  font-family: Manrope, sans-serif;
+  font-size: 12px;
+  font-weight: 800;
+}
+.flow-step strong { display: block; font-size: 14.5px; font-weight: 600; }
+.flow-step small { display: block; font-size: 12.5px; color: var(--muted); margin-top: 2px; line-height: 1.4; }
