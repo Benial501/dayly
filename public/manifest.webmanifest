@@ -1,0 +1,11 @@
+{
+  "name": "DAYLY — il tuo spazio quotidiano",
+  "short_name": "DAYLY",
+  "description": "Organizza giornate, progetti e idee con calma.",
+  "lang": "it",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f7f8f5",
+  "theme_color": "#f7f8f5",
+  "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}
