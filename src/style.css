@@ -1159,6 +1159,13 @@ h1, h2, h3, p { margin: 0; }
 }
 .switch:active i { transform: scale(.9); }
 
+.mail-summary {
+  display: block;
+  font-size: 15.5px;
+  font-weight: 600;
+  line-height: 1.38;
+  letter-spacing: -.1px;
+}
 .mail-actions {
   display: flex;
   flex-wrap: wrap;
