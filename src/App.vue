@@ -40,7 +40,7 @@ const weekTasks = computed(() => state.value.tasks.filter(task => weekDays.value
 const projectProgress = computed(() => state.value.projects.length ? Math.round(state.value.projects.reduce((sum, p) => sum + Number(p.progress || 0), 0) / state.value.projects.length) : 0)
 
 /* quanto resta la schermata d'apertura, in millisecondi */
-const SPLASH_MS = 5000
+const SPLASH_MS = 3000
 
 const soundOn = ref(sound.enabled)
 function switchSound() { sound.enabled = !soundOn.value; soundOn.value = sound.enabled }
