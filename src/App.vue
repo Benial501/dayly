@@ -39,6 +39,9 @@ const lastReview = computed(() => state.value.reviews.find(item => item.period =
 const weekTasks = computed(() => state.value.tasks.filter(task => weekDays.value.some(day => keyDate(day) === task.date)))
 const projectProgress = computed(() => state.value.projects.length ? Math.round(state.value.projects.reduce((sum, p) => sum + Number(p.progress || 0), 0) / state.value.projects.length) : 0)
 
+/* quanto resta la schermata d'apertura, in millisecondi */
+const SPLASH_MS = 5000
+
 const soundOn = ref(sound.enabled)
 function switchSound() { sound.enabled = !soundOn.value; soundOn.value = sound.enabled }
 
@@ -48,16 +51,16 @@ onMounted(async () => {
     if (event.target.closest('button')) sound.tap()
   }, { capture: true, passive: true })
 
-  const opened = Date.now()
   await loadInitialState()
   loading.value = false
-  // la schermata d'apertura resta almeno mezzo secondo, altrimenti è un lampo
   const splash = document.getElementById('splash')
   if (splash) {
+    // i cinque secondi si contano da quando apri l'app, non da quando
+    // l'app è pronta: altrimenti il caricamento si somma all'attesa
     window.setTimeout(() => {
       splash.classList.add('is-gone')
       window.setTimeout(() => splash.remove(), 500)
-    }, Math.max(0, 520 - (Date.now() - opened)))
+    }, Math.max(0, SPLASH_MS - performance.now()))
   }
 })
 
