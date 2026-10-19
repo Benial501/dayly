@@ -1,0 +1,107 @@
+import { createDecipheriv, createCipheriv, randomBytes } from 'node:crypto'
+import { accountHash, bearer, credentialHash, verifyToken } from '../lib/security.js'
+import { readPrivateJson, writePrivateJson } from '../lib/blob-store.js'
+
+const text = (value) => ({ content: [{ type: 'text', text: typeof value === 'string' ? value : JSON.stringify(value, null, 2) }] })
+const fail = (response, status, body) => { response.statusCode = status; response.setHeader('Content-Type', 'application/json'); return response.end(JSON.stringify(body)) }
+function decryptSnapshot(envelope, key) {
+  const rawKey = Buffer.from(key, 'base64url')
+  const iv = Buffer.from(envelope.iv, 'base64url')
+  const bytes = Buffer.from(envelope.data, 'base64url')
+  const decipher = createDecipheriv('aes-256-gcm', rawKey, iv)
+  decipher.setAuthTag(bytes.subarray(bytes.length - 16))
+  return JSON.parse(Buffer.concat([decipher.update(bytes.subarray(0, -16)), decipher.final()]).toString('utf8'))
+}
+function encryptSnapshot(data, key) {
+  const rawKey = Buffer.from(key, 'base64url')
+  const iv = randomBytes(12)
+  const cipher = createCipheriv('aes-256-gcm', rawKey, iv)
+  const encrypted = Buffer.concat([cipher.update(JSON.stringify(data), 'utf8'), cipher.final(), cipher.getAuthTag()])
+  return { version: 1, iv: iv.toString('base64url'), data: encrypted.toString('base64url') }
+}
+async function loadUser(claims) {
+  const root = `users/${accountHash(claims.sub)}`
+  const metadata = await readPrivateJson(`${root}/meta.json`)
+  if (!metadata || metadata.tokenVersion !== claims.tokenVersion || metadata.credentialHash !== credentialHash(claims.accountKey)) return null
+  const document = await readPrivateJson(`${root}/snapshot.json`)
+  if (!document?.snapshot) return { root, metadata, data: { tasks: [], projects: [], ideas: [], reviews: [], settings: [] } }
+  return { root, metadata, data: decryptSnapshot(document.snapshot, claims.accountKey) }
+}
+async function saveUser(user, data) {
+  const currentMetadata = await readPrivateJson(`${user.root}/meta.json`)
+  if (!currentMetadata || currentMetadata.revision !== user.metadata.revision || currentMetadata.tokenVersion !== user.metadata.tokenVersion) throw new Error('I dati DAYLY sono cambiati in un’altra sessione. Ricarica DAYLY e riprova.')
+  const snapshot = encryptSnapshot(data, user.accountKey)
+  const revision = `${Date.now()}-${randomBytes(8).toString('hex')}`
+  await writePrivateJson(`${user.root}/snapshot.json`, { snapshot, updatedAt: Date.now() })
+  await writePrivateJson(`${user.root}/meta.json`, { ...currentMetadata, revision })
+}
+function errorResponse(id, code, message) { return { jsonrpc: '2.0', id, error: { code, message } } }
+function success(id, result) { return { jsonrpc: '2.0', id, result } }
+
+const tools = [
+  { name: 'dayly_leggi_dati', description: 'Legge attività, progetti, idee e riepiloghi salvati dall’utente in DAYLY. Usa questi dati solo per la richiesta corrente.', inputSchema: { type: 'object', properties: { periodo: { type: 'string', enum: ['oggi', 'settimana', 'tutti'], description: 'Seleziona quali attività includere.' } } } },
+  { name: 'dayly_proponi_modifiche', description: 'Prepara una lista di modifiche DAYLY da mostrare all’utente. È solo un’anteprima e non cambia i dati.', inputSchema: { type: 'object', properties: { modifiche: { type: 'array', items: { type: 'object', properties: { tipo: { type: 'string', enum: ['aggiungi_attivita','sposta_attivita','aggiorna_progresso','completa_attivita'] }, titolo: { type: 'string' }, data: { type: 'string' }, ora: { type: 'string' }, progetto: { type: 'string' }, progresso: { type: 'number' } }, required: ['tipo'] } } }, required: ['modifiche'] } },
+  { name: 'dayly_applica_modifiche', description: 'Applica in DAYLY le modifiche già mostrate all’utente solo dopo che ha scritto chiaramente che le conferma. Ripeti la frase di conferma nella motivazione; se non ha confermato, non chiamare questo strumento.', inputSchema: { type: 'object', properties: { motivazione: { type: 'string', description: 'Frase esplicita di conferma dell’utente nella conversazione corrente.' }, modifiche: { type: 'array', items: { type: 'object', properties: { tipo: { type: 'string', enum: ['aggiungi_attivita','sposta_attivita','aggiorna_progresso','completa_attivita'] }, titolo: { type: 'string' }, data: { type: 'string' }, ora: { type: 'string' }, progetto: { type: 'string' }, progresso: { type: 'number' } }, required: ['tipo'] } } }, required: ['motivazione','modifiche'] } },
+]
+
+export default async function handler(request, response) {
+  response.setHeader('Cache-Control', 'no-store')
+  const claims = verifyToken(bearer(request), 'access')
+  if (!claims || claims.aud !== 'https://dayly-delta.vercel.app/api/mcp') {
+    response.setHeader('WWW-Authenticate', 'Bearer resource_metadata="https://dayly-delta.vercel.app/.well-known/oauth-protected-resource", scope="dayly:read dayly:write"')
+    return fail(response, 401, { error: 'Autorizzazione Claude richiesta.' })
+  }
+  if (request.method !== 'POST') { response.setHeader('Allow', 'POST'); return fail(response, 405, { error: 'Usa richieste MCP POST.' }) }
+  const user = await loadUser(claims)
+  if (!user) return fail(response, 401, { error: 'Autorizzazione revocata o account non disponibile.' })
+  user.accountKey = claims.accountKey
+  const body = request.body || {}
+  const { id, method, params = {} } = body
+  if (body.jsonrpc !== '2.0' || typeof method !== 'string') return fail(response, 400, errorResponse(id ?? null, -32600, 'Richiesta MCP non valida.'))
+
+  if (method === 'notifications/initialized' || method.startsWith('notifications/')) return response.status(202).end()
+  if (method === 'initialize') return response.status(200).json(success(id, { protocolVersion: params.protocolVersion || '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'DAYLY', version: '1.0.0' }, instructions: 'Rispondi in italiano. Leggi i dati solo se servono per la richiesta. Prima di applicare qualunque cambiamento, mostra una proposta chiara e chiedi conferma esplicita; senza conferma usa solo strumenti di lettura o proposta.' }))
+  if (method === 'ping') return response.status(200).json(success(id, {}))
+  if (method === 'tools/list') return response.status(200).json(success(id, { tools }))
+  if (method !== 'tools/call') return response.status(200).json(errorResponse(id, -32601, 'Metodo MCP non supportato.'))
+
+  const name = params.name
+  const args = params.arguments || {}
+  if (name === 'dayly_applica_modifiche' && !String(claims.scope || '').split(' ').includes('dayly:write')) return response.status(200).json(errorResponse(id, -32003, 'Il connettore non ha il permesso di scrivere.'))
+  if (['dayly_leggi_dati', 'dayly_proponi_modifiche'].includes(name) && !String(claims.scope || '').split(' ').includes('dayly:read')) return response.status(200).json(errorResponse(id, -32003, 'Il connettore non ha il permesso di leggere.'))
+  if (name === 'dayly_leggi_dati') {
+    let result = user.data
+    if (args.periodo === 'oggi') {
+      const today = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Rome', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())
+      result = { tasks: user.data.tasks.filter(item => item.date === today), projects: user.data.projects, ideas: [], reviews: [] }
+    } else if (args.periodo === 'settimana') {
+      const start = new Date(); start.setDate(start.getDate() - ((start.getDay() + 6) % 7)); start.setHours(0,0,0,0)
+      const end = new Date(start); end.setDate(end.getDate() + 7)
+      result = { tasks: user.data.tasks.filter(item => { const d = new Date(`${item.date}T00:00:00`); return d >= start && d < end }), projects: user.data.projects, ideas: user.data.ideas, reviews: user.data.reviews }
+    }
+    return response.status(200).json(success(id, text(result)))
+  }
+  if (name === 'dayly_proponi_modifiche') return response.status(200).json(success(id, text({ anteprima: args.modifiche || [], stato: 'Nessun dato è stato modificato. Chiedi conferma prima di applicare.' })))
+  if (name === 'dayly_applica_modifiche') {
+    if (typeof args.motivazione !== 'string' || args.motivazione.trim().length < 3) return response.status(200).json(success(id, { ...text('Serve una conferma esplicita dell’utente prima di procedere.'), isError: true }))
+    const changes = Array.isArray(args.modifiche) ? args.modifiche.slice(0, 20) : []
+    const applied = []
+    for (const change of changes) {
+      if (change.tipo === 'aggiungi_attivita' && typeof change.titolo === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(change.data || '')) {
+        user.data.tasks.push({ id: randomBytes(16).toString('hex'), title: change.titolo.slice(0,160), date: change.data, time: /^\d{2}:\d{2}$/.test(change.ora || '') ? change.ora : '', priority: false, done: false, updatedAt: Date.now() }); applied.push(change.titolo)
+      } else if (change.tipo === 'sposta_attivita') {
+        const task = user.data.tasks.find(item => item.title === change.titolo)
+        if (task && /^\d{4}-\d{2}-\d{2}$/.test(change.data || '')) { task.date = change.data; task.time = /^\d{2}:\d{2}$/.test(change.ora || '') ? change.ora : ''; task.updatedAt = Date.now(); applied.push(task.title) }
+      } else if (change.tipo === 'aggiorna_progresso') {
+        const project = user.data.projects.find(item => item.title === change.progetto)
+        if (project && Number.isFinite(Number(change.progresso))) { project.progress = Math.max(0, Math.min(100, Number(change.progresso))); applied.push(project.title) }
+      } else if (change.tipo === 'completa_attivita') {
+        const task = user.data.tasks.find(item => item.title === change.titolo)
+        if (task) { task.done = true; task.updatedAt = Date.now(); applied.push(task.title) }
+      }
+    }
+    try { await saveUser(user, user.data) } catch (error) { return response.status(200).json(success(id, { ...text(error.message), isError: true })) }
+    return response.status(200).json(success(id, text({ applicate: applied, messaggio: 'Modifiche salvate in DAYLY; si sincronizzeranno sul telefono alla prossima apertura con Internet.' })))
+  }
+  return response.status(200).json(errorResponse(id, -32602, 'Strumento non riconosciuto.'))
+}
