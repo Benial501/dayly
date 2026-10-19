@@ -274,15 +274,27 @@ const isOnline = ref(navigator.onLine)
 window.addEventListener('online', () => { isOnline.value = true })
 window.addEventListener('offline', () => { isOnline.value = false })
 
-const statusAlert = computed(() => proposalCount.value > 0 || mailCount.value > 0 || !isOnline.value || /ricarica|verificare/i.test(syncLabel.value))
+const statusAlert = computed(() => proposalCount.value > 0 || mailCount.value > 0 || !isOnline.value || !!mailboxError.value || !cloudSettings() || /ricarica|verificare/i.test(syncLabel.value))
 const syncState = computed(() => {
   if (proposalCount.value) return { label: `Claude ha ${proposalCount.value} ${proposalCount.value === 1 ? 'proposta' : 'proposte'} per te`, tone: 'violet', icon: Sparkles }
   if (mailCount.value) return { label: `Claude ti segnala ${mailCount.value} email da vedere`, tone: 'sky', icon: Mail }
   if (!isOnline.value) return { label: 'Offline · le funzioni locali restano attive', tone: 'peach', icon: CloudOff }
+  // senza collegamento Claude non può consegnare niente: meglio dirlo in home
+  // che lasciare la giornata muta come se non ci fosse nulla da vedere
+  if (!cloudSettings()) return { label: 'Claude non è collegato · tocca per attivarlo', tone: 'violet', icon: CloudOff }
+  if (mailboxError.value) return { label: 'Non riesco a leggere le email · tocca per riprovare', tone: 'peach', icon: CloudOff }
   if (/ricarica|verificare/i.test(syncLabel.value)) return { label: 'Dati cambiati altrove · ricarica prima di modificare', tone: 'peach', icon: CloudOff }
-  if (cloudSettings()) return { label: syncLabel.value, tone: 'mint', icon: CheckCircle2 }
-  return { label: 'Salvato solo su questo iPhone', tone: 'violet', icon: CloudOff }
+  return { label: syncLabel.value, tone: 'mint', icon: CheckCircle2 }
 })
+
+function tapStatus() {
+  if (proposalCount.value) return openClaudeProposals()
+  if (mailCount.value) return openMailbox()
+  // la riga promette di riprovare: che riprovi davvero, invece di scaricarti
+  // in impostazioni a cercare il pulsante giusto
+  if (mailboxError.value && cloudSettings()) return fetchMailbox(true)
+  switchTo('settings')
+}
 
 const filteredProjects = computed(() => {
   if (projectFilter.value === 'open') return state.value.projects.filter(p => Number(p.progress) < 100)
@@ -563,6 +575,12 @@ const mailboxBusy = ref(false)
 const showMailbox = ref(false)
 const showArchive = ref(false)
 const confirmArchiveWipe = ref(false)
+const mailboxError = ref('')
+const MAIL_READ_FAULT = 'Non riesco a leggere i riassunti delle email.'
+// marco gli errori scritti da noi, così un errore di rete o di parsing non
+// finisce mai davanti agli occhi dell'utente con le sue parole tecniche
+const mailFault = (message) => Object.assign(new Error(message), { friendly: true })
+const mailMessage = (error, fallback) => error?.friendly ? error.message : fallback
 const pendingMail = ref('')
 let mailPoll = null
 
@@ -606,18 +624,24 @@ async function fetchMailbox(showError = false) {
   mailboxBusy.value = true
   try {
     const response = await fetch(`/api/mailbox?accountId=${encodeURIComponent(account.accountId)}`, { headers: { Authorization: `Bearer ${account.credential}` } })
-    if (!response.ok) throw new Error('Non riesco a leggere i riassunti delle email.')
+    if (response.status === 401) throw mailFault('Il collegamento DAYLY non è più valido: ricollegalo dalle impostazioni.')
+    if (!response.ok) throw mailFault(MAIL_READ_FAULT)
     const remote = await response.json()
     mailboxRevision.value = remote.revision || null
     const list = remote.casella ? await decryptSnapshot(remote.casella, account.credential) : []
     const stored = (Array.isArray(list) ? list : []).slice().sort(byNewest)
     const tidy = tidyMailbox(stored)
     mailbox.value = tidy
+    mailboxError.value = ''
     mailboxBusy.value = false
     // l'archiviazione automatica va rimandata su, altrimenti domani ricompare
     if (JSON.stringify(tidy) !== JSON.stringify(stored)) await saveMailbox(tidy)
   } catch (error) {
-    if (showError) ping(error.message)
+    // un guasto vero non deve restare invisibile: lo dico una volta e poi lo
+    // lascio nella riga di stato, senza ripeterlo a ogni controllo dei 30s
+    const message = mailMessage(error, MAIL_READ_FAULT)
+    if (showError || !mailboxError.value) ping(message)
+    mailboxError.value = message
   } finally {
     mailboxBusy.value = false
   }
@@ -640,11 +664,11 @@ async function saveMailbox(list) {
     })
     const result = await response.json()
     if (response.status === 409) { await fetchMailbox(); ping('Claude ha segnalato altre email: ricontrolla la casella'); return false }
-    if (!response.ok) throw new Error(result.error || 'Non riesco ad aggiornare la casella.')
+    if (!response.ok) throw mailFault(result.error || 'Non riesco ad aggiornare la casella.')
     mailboxRevision.value = result.revision || null
     mailbox.value = trimmed
     return true
-  } catch (error) { ping(error.message); return false }
+  } catch (error) { ping(mailMessage(error, 'Non riesco ad aggiornare la casella.')); return false }
 }
 
 async function removeMail(id) {
@@ -836,7 +860,7 @@ function openCapture() {
             <h1 class="page-title">La tua giornata</h1>
           </div>
 
-          <button v-if="statusAlert" class="status-row" :class="`status-${syncState.tone}`" @click="proposalCount ? openClaudeProposals() : mailCount ? openMailbox() : switchTo('settings')">
+          <button v-if="statusAlert" class="status-row" :class="`status-${syncState.tone}`" @click="tapStatus()">
             <component :is="syncState.icon" :size="15" />
             <span>{{ syncState.label }}</span>
             <ChevronRight :size="15" />
