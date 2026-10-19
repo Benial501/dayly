@@ -1158,3 +1158,11 @@ h1, h2, h3, p { margin: 0; }
   transition: transform .2s ease;
 }
 .switch:active i { transform: scale(.9); }
+
+.mail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-top: 8px;
+}
+.mail-actions .btn-ghost { text-decoration: none; }
