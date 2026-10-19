@@ -23,7 +23,10 @@ function verifyPkce(verifier, challenge) {
 }
 
 export default async function handler(request, response) {
-  const path = `/${(request.query.path || []).join('/')}`
+  const routeParts = request.query?.path
+  const routeFromParams = Array.isArray(routeParts) ? routeParts.join('/') : typeof routeParts === 'string' ? routeParts : ''
+  const routeFromUrl = new URL(request.url, baseUrl()).pathname.replace(/^\/api\/oauth\/?/, '')
+  const path = `/${routeFromParams || routeFromUrl}`
   const issuer = baseUrl()
   if (request.method === 'OPTIONS') return response.status(204).setHeader('Allow', 'GET, POST, OPTIONS').end()
 
