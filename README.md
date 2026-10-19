@@ -4,13 +4,14 @@ DAYLY è un’agenda personale in italiano, pensata prima di tutto per iPhone. S
 
 ## Cosa trovi nell’app
 
-- **Oggi:** tre priorità, appuntamenti, attività senza orario e avanzamento della giornata.
+- **Oggi:** la lista della giornata in un’unica schermata, con le priorità in cima e l’avanzamento.
 - **Calendario:** settimana flessibile, impegni fissi e attività libere.
 - **Progetti e obiettivi:** percentuale di completamento aggiornata manualmente.
 - **Idee, riepiloghi e focus settimanale.**
 - **Offline:** le funzioni locali continuano a funzionare senza rete.
 - **Backup:** esportazione e ripristino di un file JSON.
-- **Cattura veloce:** scrivi più cose insieme in italiano («domani alle 15 dentista», «! chiamare Marco», «tedesco al 60%»). DAYLY riconosce data, orario, priorità e progetti, mostra l’anteprima e inserisce solo dopo conferma. Funziona offline e non chiama nessun servizio.
+- **Scrivere la giornata:** il pulsante centrale con la matita apre un foglio dove si scrive in italiano, anche più cose insieme («oggi la spesa, chiamare Marco, domani alle 15 il dentista»). DAYLY riconosce date, orari, priorità e progetti, e la data citata vale anche per le cose che la seguono. Mostra l’anteprima e inserisce solo dopo conferma. Funziona offline e non chiama nessun servizio.
+- **Toccare una voce** apre le sue azioni: segnarla fatta, renderla una priorità, spostarla a domani, eliminarla. Il cerchio a destra la spunta direttamente.
 - **Claude:** collegamento OAuth a un MCP remoto. Claude usa il piano dell’utente nell’app Claude; DAYLY non invia chiamate a un’API AI a pagamento. Le modifiche che Claude propone arrivano in DAYLY come schede da accettare o rifiutare una per una.
 
 ## Tecnologie

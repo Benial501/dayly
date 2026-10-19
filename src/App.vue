@@ -1,6 +1,6 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
-import { ArrowDownToLine, ArrowLeft, ArrowRight, PenLine, RefreshCw, Sparkles, CalendarDays, Check, CheckCircle2, ChevronRight, Clock3, CloudOff, Compass, Flag, Heart, Lightbulb, ListTodo, MessageCircle, Moon, MoreHorizontal, Plus, Settings2, Sun, Target, Trash2, Upload, X } from 'lucide-vue-next'
+import { ArrowDownToLine, ArrowLeft, Compass, ArrowRight, PenLine, RefreshCw, Sparkles, CalendarDays, Check, CheckCircle2, ChevronRight, Clock3, CloudOff, Flag, Lightbulb, ListTodo, MessageCircle, Moon, MoreHorizontal, Plus, Settings2, Sun, Target, Trash2, Upload, X } from 'lucide-vue-next'
 import { readAll, put, remove, replaceAll } from './db'
 
 const section = ref('today')
@@ -236,14 +236,7 @@ const isOnline = ref(navigator.onLine)
 window.addEventListener('online', () => { isOnline.value = true })
 window.addEventListener('offline', () => { isOnline.value = false })
 
-const openFree = computed(() => untimedTasks.value.filter(task => !task.done))
-const prioritySlots = computed(() => [0, 1, 2].map(index => priorities.value[index] || null))
-const nextAppointment = computed(() => {
-  const now = new Date()
-  const clock = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
-  const open = appointments.value.filter(task => !task.done)
-  return open.find(task => task.time >= clock) || open[0] || null
-})
+const statusAlert = computed(() => proposalCount.value > 0 || !isOnline.value || /ricarica|verificare/i.test(syncLabel.value))
 const syncState = computed(() => {
   if (proposalCount.value) return { label: `Claude ha ${proposalCount.value} ${proposalCount.value === 1 ? 'proposta' : 'proposte'} per te`, tone: 'violet', icon: Sparkles }
   if (!isOnline.value) return { label: 'Offline · le funzioni locali restano attive', tone: 'peach', icon: CloudOff }
@@ -260,36 +253,14 @@ const filteredProjects = computed(() => {
 const selectedTasks = computed(() => state.value.tasks.filter(task => task.date === selectedDate.value).sort((a, b) => (a.time || '99:99').localeCompare(b.time || '99:99')))
 const selectedDayLabel = computed(() => selectedDate.value === todayKey ? 'Oggi' : longDate(new Date(`${selectedDate.value}T12:00:00`)))
 const monthLabel = computed(() => new Intl.DateTimeFormat('it-IT', { month: 'long', year: 'numeric' }).format(weekDays.value[3]))
-const quickAddLabel = computed(() => section.value === 'projects' ? 'Nuovo progetto' : section.value === 'ideas' ? 'Nuova idea' : 'Nuovo impegno')
 
-const appointmentGroup = {
-  id: 'time',
-  title: 'Appuntamenti',
-  sub: 'Impegni con un orario fisso',
-  cta: 'Aggiungi un appuntamento',
-  emptyTitle: 'Nessun appuntamento',
-  emptyText: 'Qui finisce tutto ciò che ha un’ora precisa. Va bene anche lasciare spazio vuoto.',
-  tone: 'sky',
-  icon: Clock3,
+function daySorted(tasks) {
+  return [...tasks].sort((a, b) =>
+    (b.priority ? 1 : 0) - (a.priority ? 1 : 0) ||
+    (a.time || '99:99').localeCompare(b.time || '99:99'))
 }
-const freeGroup = {
-  id: 'free',
-  title: 'Quando vuoi',
-  sub: 'Attività senza orario, le sposti come viene',
-  cta: 'Aggiungi un’attività',
-  emptyTitle: 'Nessuna attività senza orario',
-  emptyText: 'Le attività senza orario restano libere: le fai quando capita, senza sentirti in ritardo.',
-  tone: 'violet',
-  icon: ListTodo,
-}
-const todayGroups = computed(() => [
-  { ...appointmentGroup, items: appointments.value, add: { date: todayKey, time: '09:00' } },
-  { ...freeGroup, items: untimedTasks.value, add: { date: todayKey } },
-])
-const selectedGroups = computed(() => [
-  { ...appointmentGroup, items: selectedTasks.value.filter(task => task.time), add: { date: selectedDate.value, time: '09:00' } },
-  { ...freeGroup, items: selectedTasks.value.filter(task => !task.time), add: { date: selectedDate.value } },
-])
+const todayList = computed(() => daySorted(todayTasks.value))
+const selectedList = computed(() => daySorted(selectedTasks.value))
 
 function selectedDateDefault() { return todayKey }
 function weekdayShort(date) { return new Intl.DateTimeFormat('it-IT', { weekday: 'short' }).format(date).slice(0, 3) }
@@ -306,7 +277,6 @@ function taskKind(task) {
     : { label: 'Quando vuoi', icon: ListTodo, tone: 'violet' }
 }
 function rowMeta(task) { return [formatTime(task.time), projectName(task.projectId)].filter(Boolean).join(' · ') }
-function slotLabel(index) { return ['Scegli la prima priorità', 'Scegli la seconda', 'Scegli la terza'][index] }
 function completedWord(count) { return Number(count) === 1 ? 'completata' : 'completate' }
 
 /* ───────────────────────────────────────────────────────────
@@ -316,11 +286,6 @@ function completedWord(count) { return Number(count) === 1 ? 'completata' : 'com
 const captureInput = ref('')
 const pending = ref([])
 const captureNotes = ref([])
-const captureExamples = [
-  'domani alle 15 dentista',
-  '! chiamare Marco',
-  'giovedì 9:30 presentazione per il cliente',
-]
 
 const WEEKDAYS = { domenica: 0, lunedi: 1, martedi: 2, mercoledi: 3, giovedi: 4, venerdi: 5, sabato: 6 }
 const WEEKDAY_PATTERNS = { domenica: 'domenica', lunedi: 'luned[\u00eci]', martedi: 'marted[\u00eci]', mercoledi: 'mercoled[\u00eci]', giovedi: 'gioved[\u00eci]', venerdi: 'venerd[\u00eci]', sabato: 'sabato' }
@@ -348,13 +313,46 @@ function projectByWords(text) {
 
 function splitCapture(text) {
   return text
-    .split(/\n|;|,?\s+(?:e\s+)?poi\s+|,\s*(?:e\s+)?poi\s+/i)
+    .split(/\n|;|,|\s+(?:e\s+)?poi\s+/i)
     .map(line => line.trim())
     .filter(Boolean)
-    .slice(0, 20)
+    .slice(0, 30)
 }
 
-function parseCaptureLine(line) {
+/* Estrae la prima data citata nel testo. «Prima» conta: in «oggi la spesa,
+   domani il dentista» deve vincere quella che compare per prima, non quella
+   che capita prima nel codice. */
+function extractDate(text) {
+  const flat = plain(text)
+  const found = []
+
+  const relative = [['dopodomani', () => dayAfter(2)], ['domani', () => dayAfter(1)], ['oggi', () => todayKey]]
+  for (const [word, resolve] of relative) {
+    const at = flat.indexOf(word)
+    if (at >= 0 && !(word === 'domani' && flat.slice(0, at).endsWith('dopo'))) {
+      found.push({ at, date: resolve(), pattern: new RegExp(`\\b${word}\\b`, 'i') })
+    }
+  }
+
+  const written = flat.match(/\b(?:il\s+)?(\d{1,2})\s+(gennaio|febbraio|marzo|aprile|maggio|giugno|luglio|agosto|settembre|ottobre|novembre|dicembre)\b/)
+  if (written) found.push({ at: written.index, date: monthDay(Number(written[1]), MONTHS[written[2]]), pattern: new RegExp(`\\b(?:il\\s+)?${written[1]}\\s+${written[2]}`, 'i') })
+
+  const numeric = text.match(/\b(\d{1,2})[\/-](\d{1,2})(?:[\/-](\d{2,4}))?\b/)
+  if (numeric) found.push({ at: numeric.index, date: monthDay(Number(numeric[1]), Number(numeric[2]) - 1), pattern: new RegExp(numeric[0].replace(/\//g, '\\/')) })
+
+  const weekday = flat.match(/\b(?:il\s+|di\s+)?(domenica|lunedi|martedi|mercoledi|giovedi|venerdi|sabato)\b/)
+  if (weekday) found.push({ at: weekday.index, date: nextWeekday(WEEKDAYS[weekday[1]]), pattern: new RegExp(`(?:\\b(?:il|di)\\s+)?${WEEKDAY_PATTERNS[weekday[1]]}(?:\\s+prossim[oa])?`, 'i') })
+
+  const bareDay = flat.match(/\bil\s+(\d{1,2})\b/)
+  if (bareDay) found.push({ at: bareDay.index, date: monthDay(Number(bareDay[1])), pattern: /\bil\s+\d{1,2}\b/i })
+
+  if (!found.length) return null
+  found.sort((a, b) => a.at - b.at)
+  const first = found[0]
+  return { date: first.date, rest: text.replace(first.pattern, ' ') }
+}
+
+function parseCaptureLine(line, defaultDate) {
   let rest = ` ${line} `
   let priority = false
 
@@ -371,25 +369,8 @@ function parseCaptureLine(line) {
     return { tipo: 'aggiorna_progresso', titolo: '', data: '', ora: '', priorita: false, progetto: project.title, progresso: Math.max(0, Math.min(100, Number(progressMatch[1]))) }
   }
 
-  let date = ''
-  const flat = plain(rest)
-  const dayMonth = rest.match(/\b(\d{1,2})[\/-](\d{1,2})(?:[\/-](\d{2,4}))?\b/)
-  const writtenDate = flat.match(/\b(?:il\s+)?(\d{1,2})\s+(gennaio|febbraio|marzo|aprile|maggio|giugno|luglio|agosto|settembre|ottobre|novembre|dicembre)\b/)
-  const weekday = flat.match(/\b(?:il\s+|di\s+)?(domenica|lunedi|martedi|mercoledi|giovedi|venerdi|sabato)\b/)
-
-  if (/\bdopodomani\b/.test(flat)) { date = dayAfter(2); rest = rest.replace(/\bdopodomani\b/gi, ' ') }
-  else if (/\bdomani\b/.test(flat)) { date = dayAfter(1); rest = rest.replace(/\bdomani\b/gi, ' ') }
-  else if (/\boggi\b/.test(flat)) { date = todayKey; rest = rest.replace(/\boggi\b/gi, ' ') }
-  else if (writtenDate) { date = monthDay(Number(writtenDate[1]), MONTHS[writtenDate[2]]); rest = rest.replace(new RegExp(`\\b(?:il\\s+)?${writtenDate[1]}\\s+\\S+`, 'i'), ' ') }
-  else if (dayMonth) { date = monthDay(Number(dayMonth[1]), Number(dayMonth[2]) - 1); rest = rest.replace(dayMonth[0], ' ') }
-  else if (weekday) {
-    date = nextWeekday(WEEKDAYS[weekday[1]])
-    rest = rest.replace(new RegExp(`(?:\\b(?:il|di)\\s+)?${WEEKDAY_PATTERNS[weekday[1]]}(?:\\s+prossim[oa])?`, 'i'), ' ')
-  }
-  else {
-    const bareDay = flat.match(/\bil\s+(\d{1,2})\b/)
-    if (bareDay) { date = monthDay(Number(bareDay[1])); rest = rest.replace(/\bil\s+\d{1,2}\b/i, ' ') }
-  }
+  const dated = extractDate(rest)
+  if (dated) rest = dated.rest
 
   let time = ''
   const spoken = rest.match(/\b(?:alle|alle\s+ore|ore|h)\s*(\d{1,2})(?:[:.](\d{2}))?\b/i)
@@ -402,33 +383,73 @@ function parseCaptureLine(line) {
     .replace(/\b(devo|ho da|ricordarmi di|ricordati di|bisogna)\b/gi, ' ')
     .replace(/\s+/g, ' ')
     .replace(/^[\s,.:;-]+|[\s,.:;-]+$/g, '')
-  if (!/[a-z\u00e0-\u00ff]{2}/i.test(title)) return null
+
+  // niente lettere: era solo una data o un frammento vuoto, non un'attività
+  if (!/[a-zà-ÿ]{2}/i.test(title)) return dated ? { soloData: dated.date } : null
+  title = title.replace(/^(?:l'|il|lo|la|i|gli|le)\s+/i, '')
   title = title.charAt(0).toUpperCase() + title.slice(1)
 
   return {
     tipo: 'aggiungi_attivita',
     titolo: title.slice(0, 160),
-    data: date || todayKey,
+    data: dated?.date || defaultDate,
     ora: time,
     priorita: priority,
     progetto: project?.title || '',
     progresso: 0,
+    nuovaData: dated ? dated.date : '',
   }
 }
 
+/* La data citata vale anche per quello che viene dopo: in «domani il dentista,
+   la spesa, chiamare Marco» finiscono tutte e tre domani. */
 function runCapture() {
-  const lines = splitCapture(captureInput.value)
-  if (!lines.length) return
+  const fragments = splitCapture(captureInput.value)
+  if (!fragments.length) return
   const parsed = []
   const skipped = []
-  for (const line of lines) {
-    const change = parseCaptureLine(line)
-    if (change) parsed.push({ ...change, id: newId(), origine: 'locale' })
-    else skipped.push(line)
+  let context = todayKey
+  for (const fragment of fragments) {
+    const change = parseCaptureLine(fragment, context)
+    if (!change) { skipped.push(fragment); continue }
+    if (change.soloData) { context = change.soloData; continue }
+    if (change.nuovaData) context = change.nuovaData
+    delete change.nuovaData
+    parsed.push({ ...change, id: newId(), origine: 'locale' })
   }
   pending.value = parsed
+  pendingSource.value = []
   captureNotes.value = skipped
-  if (parsed.length) captureInput.value = ''
+  if (parsed.length) { captureInput.value = ''; showCapture.value = false }
+}
+
+/* ── foglio di una singola attività ── */
+const taskSheet = ref(null)
+
+function openTask(task) { taskSheet.value = task }
+async function updateTask(task, patch, message) {
+  await put('tasks', { ...task, ...patch, updatedAt: Date.now() })
+  taskSheet.value = null
+  await refreshAndSync()
+  if (message) ping(message)
+}
+async function moveToTomorrow(task) {
+  const tomorrow = new Date(`${task.date}T12:00:00`)
+  tomorrow.setDate(tomorrow.getDate() + 1)
+  await updateTask(task, { date: keyDate(tomorrow) }, 'Spostata a domani')
+}
+async function switchPriority(task) {
+  if (!task.priority && state.value.tasks.filter(item => item.date === task.date && item.priority && item.id !== task.id).length >= 3) {
+    ping('Per ogni giorno puoi scegliere al massimo tre priorità')
+    return
+  }
+  await updateTask(task, { priority: !task.priority }, task.priority ? 'Non è più una priorità' : 'Segnata come priorità')
+}
+async function deleteTask(task) {
+  await remove('tasks', task.id)
+  taskSheet.value = null
+  await refreshAndSync()
+  ping('Attività eliminata')
 }
 
 /* ── proposte arrivate da Claude tramite il connettore ── */
@@ -577,11 +598,10 @@ async function applyPending() {
   await refreshAndSync()
   ping(applied ? `${applied} ${applied === 1 ? 'cosa aggiunta' : 'cose aggiunte'}` : 'Non sono riuscito ad aggiungere nulla')
 }
-function quickAdd() {
-  if (section.value === 'projects') return beginAdd('project')
-  if (section.value === 'ideas') return beginAdd('idea')
-  if (section.value === 'calendar') return beginAdd('task', { date: selectedDate.value })
-  beginAdd('task', { date: todayKey })
+const showCapture = ref(false)
+function openCapture() {
+  captureNotes.value = []
+  showCapture.value = true
 }
 </script>
 
@@ -613,7 +633,7 @@ function quickAdd() {
             <h1 class="page-title">La tua giornata</h1>
           </div>
 
-          <button class="status-row" :class="`status-${syncState.tone}`" @click="proposalCount ? openClaudeProposals() : beginAdd('backup')">
+          <button v-if="statusAlert" class="status-row" :class="`status-${syncState.tone}`" @click="proposalCount ? openClaudeProposals() : beginAdd('backup')">
             <component :is="syncState.icon" :size="15" />
             <span>{{ syncState.label }}</span>
             <ChevronRight :size="15" />
@@ -628,91 +648,31 @@ function quickAdd() {
             <button class="btn btn-block" style="margin-top:14px" @click="openClaudeProposals">Guarda cosa propone</button>
           </section>
 
-          <button class="capture-shortcut" @click="switchTo('capture')">
-            <span class="row-icon tone-violet"><PenLine :size="18" /></span>
-            <span>
-              <strong>Scrivi più cose insieme</strong>
-              <small>«domani alle 15 dentista» e le metto in agenda</small>
-            </span>
-            <ChevronRight :size="18" />
-          </button>
-
-          <section class="card status-card">
-            <div class="ring" :style="{ '--p': `${progressToday}%` }"><span>{{ progressToday }}<small>%</small></span></div>
-            <div class="status-lines">
-              <strong>{{ doneToday }} di {{ todayTasks.length }} {{ completedWord(doneToday) }}</strong>
-              <div class="status-line">
-                <Clock3 :size="15" />
-                <span v-if="nextAppointment">Il prossimo alle <strong>{{ formatTime(nextAppointment.time) }}</strong>, {{ nextAppointment.title }}</span>
-                <span v-else>Nessun appuntamento in agenda</span>
-              </div>
-              <div class="status-line">
-                <ListTodo :size="15" />
-                <span><strong>{{ openFree.length }}</strong> {{ openFree.length === 1 ? 'cosa' : 'cose' }} da fare quando vuoi</span>
-              </div>
-            </div>
-          </section>
-
           <section class="card">
             <div class="card-head">
-              <h2>Le tre priorità<span class="head-sub">Le poche cose che vuoi portare a casa oggi</span></h2>
+              <h2>Oggi<span class="head-sub">{{ todayTasks.length ? `${doneToday} di ${todayTasks.length} ${completedWord(doneToday)}` : 'Niente in programma' }}</span></h2>
+              <button class="add-round" aria-label="Aggiungi una cosa" @click="beginAdd('task', { date: todayKey })"><Plus :size="17" /></button>
             </div>
-            <div class="list">
-              <template v-for="(task, index) in prioritySlots" :key="index">
-                <button v-if="task" class="row" :class="{ 'is-done': task.done }" @click="toggleTask(task)">
-                  <span class="row-rank">0{{ index + 1 }}</span>
+            <div v-if="todayTasks.length" class="bar bar-head"><span :style="{ width: `${progressToday}%` }"></span></div>
+            <div v-if="todayList.length" class="list">
+              <div v-for="task in todayList" :key="task.id" class="row" :class="{ 'is-done': task.done }">
+                <button class="row-main" @click="openTask(task)">
+                  <span class="row-icon" :class="`tone-${taskKind(task).tone}`"><component :is="taskKind(task).icon" :size="18" /></span>
                   <span class="row-body">
-                    <span class="type-label" :class="`label-${taskKind(task).tone}`">{{ taskKind(task).label }}</span>
+                    <span v-if="task.priority" class="type-line"><span class="pill-priority"><Flag :size="10" /> Priorità</span></span>
                     <span class="row-title">{{ task.title }}</span>
-                    <span class="row-meta">{{ [formatTime(task.time) || 'Senza orario', projectName(task.projectId)].filter(Boolean).join(' · ') }}</span>
+                    <span v-if="rowMeta(task)" class="row-meta">{{ rowMeta(task) }}</span>
                   </span>
-                  <span class="check" :class="{ on: task.done }"><Check :size="14" /></span>
                 </button>
-                <button v-else class="row row-slot" @click="beginAdd('task', { priority: true })">
-                  <span class="row-rank">0{{ index + 1 }}</span>
-                  <span class="row-body"><span class="row-title slot-title">{{ slotLabel(index) }}</span></span>
-                  <span class="slot-plus"><Plus :size="15" /></span>
-                </button>
-              </template>
-            </div>
-          </section>
-
-          <section v-for="group in todayGroups" :key="group.id" class="card">
-            <div class="card-head">
-              <h2>{{ group.title }}<span class="head-sub">{{ group.sub }}</span></h2>
-              <button class="add-round" :aria-label="group.cta" @click="beginAdd('task', group.add)"><Plus :size="17" /></button>
-            </div>
-            <div v-if="group.items.length" class="list">
-              <button v-for="task in group.items" :key="task.id" class="row" :class="{ 'is-done': task.done }" @click="toggleTask(task)">
-                <span class="row-icon" :class="`tone-${taskKind(task).tone}`"><component :is="taskKind(task).icon" :size="18" /></span>
-                <span class="row-body">
-                  <span v-if="task.priority" class="type-line"><span class="pill-priority"><Flag :size="10" /> Priorità</span></span>
-                  <span class="row-title">{{ task.title }}</span>
-                  <span v-if="rowMeta(task)" class="row-meta">{{ rowMeta(task) }}</span>
-                </span>
-                <span class="check" :class="{ on: task.done }"><Check :size="14" /></span>
-              </button>
+                <button class="check" :class="{ on: task.done }" :aria-label="task.done ? `Riapri ${task.title}` : `Segna fatta ${task.title}`" @click="toggleTask(task)"><Check :size="14" /></button>
+              </div>
             </div>
             <div v-else class="empty">
-              <span class="empty-art" :class="`tone-${group.tone}`"><component :is="group.icon" :size="22" /></span>
-              <strong>{{ group.emptyTitle }}</strong>
-              <p>{{ group.emptyText }}</p>
-              <button class="btn" @click="beginAdd('task', group.add)"><Plus :size="16" /> {{ group.cta }}</button>
+              <span class="empty-art tone-violet"><PenLine :size="22" /></span>
+              <strong>La giornata è ancora bianca</strong>
+              <p>Tocca la matita qui sotto e scrivi quello che devi fare, come viene. Ci penso io a metterlo in ordine.</p>
+              <button class="btn" @click="openCapture"><PenLine :size="16" /> Scrivi la giornata</button>
             </div>
-          </section>
-
-          <section class="card">
-            <div class="card-head">
-              <h2>Il focus della settimana<span class="head-sub">L’intenzione a cui tornare quando la giornata si affolla</span></h2>
-              <button class="ghost-round" aria-label="Apri i riepiloghi" @click="switchTo('review')"><ChevronRight :size="18" /></button>
-            </div>
-            <p class="project-note">{{ lastReview?.focus || 'Non ne hai ancora scelto uno. Basta una parola: la ritrovi qui ogni giorno.' }}</p>
-            <button class="add-line" @click="switchTo('review')">{{ lastReview?.focus ? 'Rivedi il focus' : 'Scegli il tuo focus' }}</button>
-          </section>
-
-          <section class="quote-card">
-            <Heart :size="20" style="flex:none;margin-top:2px" />
-            <p>Non serve fare tutto.<br /><strong>Serve fare il prossimo passo.</strong></p>
           </section>
         </section>
 
@@ -738,65 +698,31 @@ function quickAdd() {
                 <i class="dot" :class="{ 'dot-hidden': !tasksOn(day).length }"></i>
               </button>
             </div>
-            <p class="cal-caption">{{ selectedDayLabel }} · {{ selectedTasks.length ? `${selectedTasks.filter(t => t.done).length} di ${selectedTasks.length} ${completedWord(selectedTasks.filter(t => t.done).length)}` : 'giornata libera' }}</p>
           </section>
 
-          <section v-for="group in selectedGroups" :key="group.id" class="card">
+          <section class="card">
             <div class="card-head">
-              <h2>{{ group.title }}<span class="head-sub">{{ group.sub }}</span></h2>
-              <button class="add-round" :aria-label="group.cta" @click="beginAdd('task', group.add)"><Plus :size="17" /></button>
+              <h2>{{ selectedDayLabel }}<span class="head-sub">{{ selectedTasks.length ? `${selectedTasks.filter(t => t.done).length} di ${selectedTasks.length} ${completedWord(selectedTasks.filter(t => t.done).length)}` : 'Giornata libera' }}</span></h2>
+              <button class="add-round" aria-label="Aggiungi in questo giorno" @click="beginAdd('task', { date: selectedDate })"><Plus :size="17" /></button>
             </div>
-            <div v-if="group.items.length" class="list">
-              <button v-for="task in group.items" :key="task.id" class="row" :class="{ 'is-done': task.done }" @click="toggleTask(task)">
-                <span class="row-icon" :class="`tone-${taskKind(task).tone}`"><component :is="taskKind(task).icon" :size="18" /></span>
-                <span class="row-body">
-                  <span v-if="task.priority" class="type-line"><span class="pill-priority"><Flag :size="10" /> Priorità</span></span>
-                  <span class="row-title">{{ task.title }}</span>
-                  <span v-if="rowMeta(task)" class="row-meta">{{ rowMeta(task) }}</span>
-                </span>
-                <span class="check" :class="{ on: task.done }"><Check :size="14" /></span>
-              </button>
+            <div v-if="selectedList.length" class="list">
+              <div v-for="task in selectedList" :key="task.id" class="row" :class="{ 'is-done': task.done }">
+                <button class="row-main" @click="openTask(task)">
+                  <span class="row-icon" :class="`tone-${taskKind(task).tone}`"><component :is="taskKind(task).icon" :size="18" /></span>
+                  <span class="row-body">
+                    <span v-if="task.priority" class="type-line"><span class="pill-priority"><Flag :size="10" /> Priorità</span></span>
+                    <span class="row-title">{{ task.title }}</span>
+                    <span v-if="rowMeta(task)" class="row-meta">{{ rowMeta(task) }}</span>
+                  </span>
+                </button>
+                <button class="check" :class="{ on: task.done }" :aria-label="task.done ? `Riapri ${task.title}` : `Segna fatta ${task.title}`" @click="toggleTask(task)"><Check :size="14" /></button>
+              </div>
             </div>
             <div v-else class="empty">
-              <span class="empty-art" :class="`tone-${group.tone}`"><component :is="group.icon" :size="22" /></span>
-              <strong>{{ group.emptyTitle }}</strong>
-              <p>{{ group.emptyText }}</p>
-              <button class="btn" @click="beginAdd('task', group.add)"><Plus :size="16" /> {{ group.cta }}</button>
-            </div>
-          </section>
-        </section>
-
-        <section v-else-if="section === 'capture'" class="page">
-          <div class="page-head">
-            <p class="date-line">Una riga per cosa</p>
-            <h1 class="page-title">Cattura veloce</h1>
-            <p class="page-sub">Scrivi come viene. DAYLY riconosce data, orario e priorità, poi confermi tu.</p>
-          </div>
-
-          <section class="card">
-            <textarea v-model="captureInput" rows="5" class="composer-input" placeholder="domani alle 15 dentista&#10;! chiamare Marco&#10;giovedì 9:30 presentazione"></textarea>
-            <button class="btn btn-block" style="margin-top:14px" :disabled="!captureInput.trim()" @click="runCapture">Leggi quello che ho scritto</button>
-          </section>
-
-          <section v-if="captureNotes.length" class="card">
-            <div class="card-head"><h2>Non ho capito queste righe<span class="head-sub">Riscrivile o aggiungile a mano</span></h2></div>
-            <p v-for="note in captureNotes" :key="note" class="unread-line">{{ note }}</p>
-          </section>
-
-          <section class="card">
-            <div class="card-head"><h2>Cosa riconosce<span class="head-sub">Una riga per cosa, oppure separa con «poi»</span></h2></div>
-            <div class="legend"><span class="legend-key">oggi · domani · dopodomani</span><span>la data</span></div>
-            <div class="legend"><span class="legend-key">giovedì · 24 ottobre · 24/10</span><span>il giorno preciso</span></div>
-            <div class="legend"><span class="legend-key">alle 15 · 9:30 · ore 18</span><span>l’orario, che la rende un appuntamento</span></div>
-            <div class="legend"><span class="legend-key">! all’inizio · priorità</span><span>una delle tre del giorno</span></div>
-            <div class="legend"><span class="legend-key">il nome di un progetto</span><span>la collega a quel progetto</span></div>
-            <div class="legend"><span class="legend-key">tedesco al 60%</span><span>aggiorna la percentuale, senza creare attività</span></div>
-          </section>
-
-          <section class="card">
-            <div class="card-head"><h2>Prova così</h2></div>
-            <div class="chat-hint">
-              <button v-for="example in captureExamples" :key="example" class="chat-example" @click="captureInput = captureInput.trim() ? `${captureInput.trim()}\n${example}` : example">{{ example }}</button>
+              <span class="empty-art tone-sky"><CalendarDays :size="22" /></span>
+              <strong>Niente in questo giorno</strong>
+              <p>Gli impegni con un orario finiscono in agenda; quelli senza restano flessibili.</p>
+              <button class="btn" @click="beginAdd('task', { date: selectedDate })"><Plus :size="16" /> Aggiungi</button>
             </div>
           </section>
         </section>
@@ -1008,7 +934,7 @@ function quickAdd() {
       <nav class="tabbar" aria-label="Navigazione principale">
         <button class="tab" :class="{ on: section === 'today' }" @click="switchTo('today')"><Sun :size="20" /><span>Oggi</span><i class="tab-dot"></i></button>
         <button class="tab" :class="{ on: section === 'calendar' }" @click="switchTo('calendar')"><CalendarDays :size="20" /><span>Calendario</span><i class="tab-dot"></i></button>
-        <button class="tab-add" :aria-label="quickAddLabel" @click="quickAdd"><Plus :size="26" /></button>
+        <button class="tab-add" aria-label="Scrivi quello che devi fare" @click="openCapture"><PenLine :size="24" /></button>
         <button class="tab" :class="{ on: section === 'projects' }" @click="switchTo('projects')"><Target :size="20" /><span>Progetti</span><i class="tab-dot"></i></button>
         <button class="tab" :class="{ on: ['ideas', 'review', 'assistant'].includes(section) }" @click="showSheet = true"><MoreHorizontal :size="20" /><span>Altro</span><i class="tab-dot"></i></button>
       </nav>
@@ -1025,11 +951,6 @@ function quickAdd() {
           </div>
           <button class="ghost-round" aria-label="Chiudi" @click="showSheet = false"><X :size="18" /></button>
         </div>
-        <button class="sheet-link" @click="switchTo('capture')">
-          <span class="row-icon tone-violet"><PenLine :size="18" /></span>
-          <div><strong>Cattura veloce</strong><small>Scrivi più cose insieme, le metto in agenda</small></div>
-          <ChevronRight class="go" :size="18" />
-        </button>
         <button class="sheet-link" @click="switchTo('ideas')">
           <span class="row-icon tone-mint"><Lightbulb :size="18" /></span>
           <div><strong>Idee</strong><small>Appunti veloci da riprendere con calma</small></div>
@@ -1049,6 +970,60 @@ function quickAdd() {
           <span class="row-icon tone-peach"><Settings2 :size="18" /></span>
           <div><strong>Impostazioni e backup</strong><small>{{ cloudSettings() ? 'Locale · copia cifrata online' : 'Dati salvati solo su questo iPhone' }}</small></div>
           <ChevronRight class="go" :size="18" />
+        </button>
+      </section>
+    </div>
+
+    <!-- scrivere quello che c'è da fare -->
+    <div v-if="showCapture" class="backdrop" @click.self="showCapture = false">
+      <section class="sheet">
+        <div class="sheet-grip"></div>
+        <div class="sheet-head">
+          <div>
+            <h2>Scrivi la giornata</h2>
+            <p>Come viene. Riconosco date, orari e priorità.</p>
+          </div>
+          <button class="ghost-round" aria-label="Chiudi" @click="showCapture = false"><X :size="18" /></button>
+        </div>
+        <textarea v-model="captureInput" rows="5" class="composer-input" autofocus placeholder="oggi la spesa e chiamare Marco&#10;domani alle 15 il dentista&#10;! finire la presentazione"></textarea>
+        <p class="capture-tip">Una cosa per riga, oppure separale con una virgola. La data vale anche per quelle che seguono.</p>
+        <div v-if="captureNotes.length" class="capture-unread">
+          <strong>Queste non le ho capite</strong>
+          <span v-for="note in captureNotes" :key="note">{{ note }}</span>
+        </div>
+        <div class="sheet-actions">
+          <button class="btn btn-soft" @click="showCapture = false">Chiudi</button>
+          <button class="btn" :disabled="!captureInput.trim()" @click="runCapture">Leggi</button>
+        </div>
+      </section>
+    </div>
+
+    <!-- cosa fare con una singola attività -->
+    <div v-if="taskSheet" class="backdrop" @click.self="taskSheet = null">
+      <section class="sheet">
+        <div class="sheet-grip"></div>
+        <div class="sheet-head">
+          <div>
+            <h2>{{ taskSheet.title }}</h2>
+            <p>{{ [taskSheet.date === todayKey ? 'Oggi' : longDate(new Date(`${taskSheet.date}T12:00:00`)), formatTime(taskSheet.time) || 'quando vuoi'].join(' · ') }}</p>
+          </div>
+          <button class="ghost-round" aria-label="Chiudi" @click="taskSheet = null"><X :size="18" /></button>
+        </div>
+        <button class="sheet-link" @click="updateTask(taskSheet, { done: !taskSheet.done }, taskSheet.done ? 'Riaperta' : 'Fatta!')">
+          <span class="row-icon tone-mint"><Check :size="18" /></span>
+          <div><strong>{{ taskSheet.done ? 'Riapri' : 'Segna come fatta' }}</strong></div>
+        </button>
+        <button class="sheet-link" @click="switchPriority(taskSheet)">
+          <span class="row-icon tone-peach"><Flag :size="18" /></span>
+          <div><strong>{{ taskSheet.priority ? 'Togli dalle priorità' : 'Rendila una priorità' }}</strong><small>Al massimo tre al giorno</small></div>
+        </button>
+        <button class="sheet-link" @click="moveToTomorrow(taskSheet)">
+          <span class="row-icon tone-sky"><ArrowRight :size="18" /></span>
+          <div><strong>Sposta a domani</strong></div>
+        </button>
+        <button class="sheet-link danger-link" @click="deleteTask(taskSheet)">
+          <span class="row-icon tone-rose"><Trash2 :size="18" /></span>
+          <div><strong>Elimina</strong><small>Sparisce dall’agenda</small></div>
         </button>
       </section>
     </div>
