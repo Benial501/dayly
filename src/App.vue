@@ -1,20 +1,14 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
-import { ArrowDownToLine, ArrowLeft, ArrowRight, ArrowUpRight, CalendarDays, Check, CheckCircle2, ChevronDown, Circle, Clock3, CloudOff, Compass, Download, Flag, Heart, Lightbulb, ListTodo, Menu, MessageCircle, Moon, MoreHorizontal, Plus, Send, Settings2, Sparkles, Sun, Target, Trash2, Upload, X } from 'lucide-vue-next'
+import { ArrowDownToLine, ArrowLeft, ArrowRight, CalendarDays, Check, CheckCircle2, ChevronRight, Clock3, CloudOff, Compass, Flag, Heart, Lightbulb, ListTodo, MessageCircle, Moon, MoreHorizontal, Plus, Settings2, Sun, Target, Trash2, Upload, X } from 'lucide-vue-next'
 import { readAll, put, remove, replaceAll } from './db'
 
-const nav = [
-  { id: 'today', label: 'Oggi', icon: Sun }, { id: 'calendar', label: 'Calendario', icon: CalendarDays },
-  { id: 'projects', label: 'Progetti', icon: Target }, { id: 'ideas', label: 'Idee', icon: Lightbulb },
-  { id: 'review', label: 'Riepiloghi', icon: Moon }, { id: 'assistant', label: 'Assistente', icon: MessageCircle },
-]
 const section = ref('today')
 const state = ref({ tasks: [], projects: [], ideas: [], reviews: [], settings: [] })
 const loading = ref(true)
 const modal = ref(null)
 const form = ref({})
 const toast = ref('')
-const showMobileNav = ref(false)
 const calendarOffset = ref(0)
 const importInput = ref(null)
 const syncLabel = ref('Salvato su questo iPhone')
@@ -175,10 +169,10 @@ async function disconnectClaude() {
   await syncLocal()
   ping('Collegamento Claude revocato')
 }
-function switchTo(id) { section.value = id; showMobileNav.value = false }
+function switchTo(id) { section.value = id; showSheet.value = false }
 function ping(message) { toast.value = message; window.setTimeout(() => { toast.value = '' }, 2600) }
 function beginAdd(type, extra = {}) {
-  form.value = { title: '', date: todayKey, time: '', priority: false, done: false, progress: 0, color: '#bdebf0', notes: '', ...extra }
+  form.value = { title: '', date: todayKey, time: '', priority: false, done: false, progress: 0, color: '#E8E5FF', notes: '', ...extra }
   modal.value = type
 }
 async function saveForm() {
@@ -196,8 +190,6 @@ async function saveForm() {
 async function toggleTask(task) { await put('tasks', { ...task, done: !task.done }); await refreshAndSync() }
 async function deleteItem(store, item) { await remove(store, item.id); await refreshAndSync(); ping('Elemento eliminato') }
 async function setProgress(project, value) { await put('projects', { ...project, progress: Number(value) }); await refreshAndSync() }
-function sectionTitle(id = section.value) { return nav.find(item => item.id === id)?.label || 'Oggi' }
-function shortDate(date) { return new Intl.DateTimeFormat('it-IT', { weekday: 'short', day: 'numeric' }).format(date) }
 function tasksOn(date) { return state.value.tasks.filter(task => task.date === keyDate(date)).sort((a, b) => (a.time || '99:99').localeCompare(b.time || '99:99')) }
 function formatTime(value) { return value ? new Intl.DateTimeFormat('it-IT', { hour: '2-digit', minute: '2-digit' }).format(new Date(`2000-01-01T${value}:00`)) : '' }
 function projectName(id) { return state.value.projects.find(project => project.id === id)?.title || '' }
@@ -231,115 +223,571 @@ async function saveWeeklyFocus() {
   await put('reviews', { id: 'week', period: 'week', focus, updatedAt: Date.now() })
   await refreshAndSync(); ping('Focus della settimana salvato')
 }
-function dateTasks(d) { return tasksOn(d).length ? tasksOn(d).map(t => `${t.time ? `${t.time} · ` : ''}${t.title}`).join('\n') : 'Nessun impegno per ora' }
 
 const todayReview = computed(() => state.value.reviews.find(item => item.id === `day-${todayKey}`))
+
+/* ── stato e helper della nuova interfaccia mobile ── */
+const showSheet = ref(false)
+const selectedDate = ref(todayKey)
+const todayFilter = ref('all')
+const projectFilter = ref('all')
+
+const filteredToday = computed(() => {
+  if (todayFilter.value === 'event') return appointments.value
+  if (todayFilter.value === 'free') return untimedTasks.value
+  if (todayFilter.value === 'priority') return priorities.value
+  return todayTasks.value
+})
+const filteredProjects = computed(() => {
+  if (projectFilter.value === 'open') return state.value.projects.filter(p => Number(p.progress) < 100)
+  if (projectFilter.value === 'done') return state.value.projects.filter(p => Number(p.progress) >= 100)
+  return state.value.projects
+})
+const selectedTasks = computed(() => state.value.tasks.filter(task => task.date === selectedDate.value).sort((a, b) => (a.time || '99:99').localeCompare(b.time || '99:99')))
+const selectedDayLabel = computed(() => selectedDate.value === todayKey ? 'Oggi' : longDate(new Date(`${selectedDate.value}T12:00:00`)))
+const monthLabel = computed(() => new Intl.DateTimeFormat('it-IT', { month: 'long', year: 'numeric' }).format(weekDays.value[3]))
+const quickAddLabel = computed(() => section.value === 'projects' ? 'Nuovo progetto' : section.value === 'ideas' ? 'Nuova idea' : 'Nuovo impegno')
+
+function weekdayShort(date) { return new Intl.DateTimeFormat('it-IT', { weekday: 'short' }).format(date).slice(0, 3) }
+function longDate(date) { return new Intl.DateTimeFormat('it-IT', { weekday: 'long', day: 'numeric', month: 'long' }).format(date) }
+function shortMonth(value) { return new Intl.DateTimeFormat('it-IT', { day: 'numeric', month: 'short' }).format(new Date(value || Date.now())) }
+function goToday() { calendarOffset.value = 0; selectedDate.value = todayKey }
+function shiftWeek(step) {
+  calendarOffset.value += step
+  selectedDate.value = weekDays.value.some(day => keyDate(day) === todayKey) ? todayKey : keyDate(weekDays.value[0])
+}
+function taskKind(task) {
+  if (task.priority) return { label: 'Priorità', icon: Flag, tone: 'peach' }
+  if (task.time) return { label: 'Appuntamento', icon: Clock3, tone: 'sky' }
+  if (task.projectId) return { label: 'Traguardo', icon: Target, tone: 'mint' }
+  return { label: 'Attività', icon: ListTodo, tone: 'violet' }
+}
+function completedWord(count) { return Number(count) === 1 ? 'completata' : 'completate' }
+function quickAdd() {
+  if (section.value === 'projects') return beginAdd('project')
+  if (section.value === 'ideas') return beginAdd('idea')
+  if (section.value === 'calendar') return beginAdd('task', { date: selectedDate.value })
+  beginAdd('task', { date: todayKey })
+}
 </script>
 
-<template>
-  <div class="app-shell">
-    <aside class="sidebar">
-      <a class="brand" href="#" @click.prevent="switchTo('today')"><img class="brand-mark" src="/logo.jpg" alt="" /><span>dayly<span class="brand-dot">.</span></span></a>
-      <div class="side-caption">IL TUO SPAZIO</div>
-      <nav class="nav-list" aria-label="Navigazione principale">
-        <button v-for="item in nav" :key="item.id" class="nav-item" :class="{ active: section === item.id }" @click="switchTo(item.id)">
-          <component :is="item.icon" :size="18" :stroke-width="1.8" /><span>{{ item.label }}</span><span v-if="item.id === 'today' && priorities.length" class="nav-count">{{ priorities.length }}</span>
-        </button>
-      </nav>
-      <div class="sidebar-bottom">
-        <div class="week-card"><div class="week-card-icon"><Compass :size="17" /></div><div><strong>Un passo alla volta</strong><span>La tua settimana, con calma</span></div><ArrowUpRight :size="15" /></div>
-        <div class="local-note"><span class="online-dot"></span><span>{{ syncLabel }}</span></div>
-        <button class="nav-item settings-link" @click="beginAdd('backup')"><Settings2 :size="18" /><span>Impostazioni e backup</span></button>
-        <div class="profile"><div class="avatar">C</div><div class="profile-text"><strong>Il mio spazio</strong><span>Solo per te</span></div><MoreHorizontal :size="18" /></div>
-      </div>
-    </aside>
-    <main class="main-area">
-      <header class="topbar">
-        <button class="mobile-menu" aria-label="Apri menu" @click="showMobileNav = !showMobileNav"><Menu :size="20" /></button>
-        <div class="breadcrumb">I miei spazi <span>/</span> <strong>{{ sectionTitle() }}</strong></div>
-        <div class="top-actions"><span class="offline-pill"><CloudOff :size="14" /> Offline pronto</span><button class="top-add" @click="beginAdd('task')"><Plus :size="16" /><span>Nuova attività</span></button></div>
-      </header>
-      <div v-if="showMobileNav" class="mobile-nav">
-        <button v-for="item in nav" :key="item.id" @click="switchTo(item.id)"><component :is="item.icon" :size="17" /> {{ item.label }}</button>
-      </div>
 
-      <div v-if="loading" class="loading-state">Un momento…</div>
-      <template v-else>
-        <section v-if="section === 'today'" class="page today-page">
-          <div class="page-heading"><div><div class="date-kicker">{{ dateLabel }}</div><h1>{{ greeting }}, <em>Christian.</em></h1><p class="subheading">Tutto quello che ti serve, per oggi.</p></div><div class="heading-art"><div class="art-sun"></div><span>✳</span></div></div>
-          <div class="dashboard-grid">
-            <div class="main-column">
-              <section class="panel priorities-panel">
-                <div class="section-head"><div><div class="eyebrow"><span class="eyebrow-dot"></span> IL TUO GIORNO</div><h2>Le tre cose importanti</h2></div><button class="icon-button" aria-label="Aggiungi priorità" @click="beginAdd('task', { priority: true })"><Plus :size="18" /></button></div>
-                <div v-if="priorities.length" class="priority-list">
-                  <button v-for="(task, i) in priorities" :key="task.id" class="priority-row" @click="toggleTask(task)"><span class="priority-number">0{{ i + 1 }}</span><span class="task-check" :class="{ checked: task.done }"><Check v-if="task.done" :size="14" /></span><span class="task-copy" :class="{ completed: task.done }"><strong>{{ task.title }}</strong><small v-if="task.time">{{ formatTime(task.time) }}<template v-if="projectName(task.projectId)"> · {{ projectName(task.projectId) }}</template></small></span><ChevronDown :size="15" class="row-chevron" /></button>
-                </div>
-                <div v-else class="empty-priorities"><div class="empty-star">✳</div><div><strong>Una giornata tutta da scrivere</strong><span>Scegli la prima cosa che conta per te.</span></div><button class="text-button" @click="beginAdd('task', { priority: true })">Aggiungi una priorità <ArrowRight :size="14" /></button></div>
-                <button class="add-line" @click="beginAdd('task', { priority: true })"><Plus :size="16" /> Aggiungi una priorità</button>
-              </section>
-              <section class="panel schedule-panel">
-                <div class="section-head"><div><div class="eyebrow"><Clock3 :size="13" /> IN AGENDA</div><h2>Il ritmo di oggi</h2></div><button class="inline-link" @click="switchTo('calendar')">Apri calendario <ArrowRight :size="14" /></button></div>
-                <div v-if="appointments.length" class="timeline">
-                  <div v-for="task in appointments" :key="task.id" class="timeline-row"><div class="timeline-time">{{ formatTime(task.time) }}</div><div class="timeline-track"><span :class="{ filled: task.done }"></span></div><button class="timeline-card" :class="{ done: task.done }" @click="toggleTask(task)"><span class="timeline-title">{{ task.title }}</span><span v-if="projectName(task.projectId)" class="tag">{{ projectName(task.projectId) }}</span><CheckCircle2 v-if="task.done" :size="16" class="timeline-done" /></button></div>
-                </div>
-                <div v-else class="empty-schedule"><div class="empty-clock"><Clock3 :size="19" /></div><div><strong>Nessun appuntamento in agenda</strong><span>Lascia spazio anche alle pause.</span></div></div>
-                <div v-if="untimedTasks.length" class="unscheduled"><span class="unscheduled-label">SENZA ORARIO</span><button v-for="task in untimedTasks" :key="task.id" class="unscheduled-task" @click="toggleTask(task)"><span class="task-check small" :class="{ checked: task.done }"><Check v-if="task.done" :size="12" /></span><span :class="{ completed: task.done }">{{ task.title }}</span><span v-if="task.priority" class="priority-tag">Priorità</span></button></div>
-                <button class="add-line" @click="beginAdd('task', { date: todayKey })"><Plus :size="16" /> Aggiungi un impegno</button>
-              </section>
-              <section class="gentle-card"><div class="gentle-icon"><Heart :size="17" /></div><p>Non serve fare tutto.<br /><strong>Serve fare il prossimo passo.</strong></p><span>✳</span></section>
+<template>
+  <div class="app">
+    <div class="phone">
+      <header class="appbar">
+        <div class="appbar-id">
+          <img class="avatar" src="/logo.jpg" alt="" />
+          <div>
+            <span class="appbar-kicker">{{ greeting }}</span>
+            <strong>Christian</strong>
+          </div>
+        </div>
+        <button class="round-btn" aria-label="Impostazioni e backup" @click="beginAdd('backup')">
+          <Settings2 :size="19" />
+          <span v-if="!cloudSettings()" class="badge"></span>
+        </button>
+      </header>
+
+      <div v-if="loading" class="loading">Un momento…</div>
+
+      <main v-else class="scroll">
+        <!-- ─────────── OGGI ─────────── -->
+        <section v-if="section === 'today'" class="page">
+          <div class="page-head">
+            <p class="date-line">{{ dateLabel }}</p>
+            <h1 class="page-title">La tua giornata</h1>
+          </div>
+
+          <div class="tiles">
+            <button class="tile tile-violet" @click="todayFilter = 'all'">
+              <svg class="tile-spark" width="40" height="18" viewBox="0 0 40 18" fill="none" aria-hidden="true"><path d="M1 14 L8 8 L14 11 L21 3 L28 9 L39 2" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" /></svg>
+              <span class="tile-num">{{ todayTasks.length }}</span>
+              <span class="tile-foot">Oggi <ChevronRight :size="14" /></span>
+            </button>
+            <button class="tile tile-peach" @click="todayFilter = 'priority'">
+              <svg class="tile-spark" width="40" height="18" viewBox="0 0 40 18" fill="none" aria-hidden="true"><path d="M1 9 Q6 1 11 9 T21 9 T31 9 T39 5" stroke="currentColor" stroke-width="2" stroke-linecap="round" /></svg>
+              <span class="tile-num">{{ priorities.length }}<small style="font-size:16px">/3</small></span>
+              <span class="tile-foot">Priorità <ChevronRight :size="14" /></span>
+            </button>
+            <button class="tile tile-sky" @click="switchTo('projects')">
+              <svg class="tile-spark" width="40" height="18" viewBox="0 0 40 18" fill="none" aria-hidden="true"><path d="M1 16 L9 12 L17 13 L25 6 L32 8 L39 1" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" /></svg>
+              <span class="tile-num">{{ state.projects.length }}</span>
+              <span class="tile-foot">Progetti <ChevronRight :size="14" /></span>
+            </button>
+            <button class="tile tile-mint" @click="switchTo('ideas')">
+              <svg class="tile-spark" width="40" height="18" viewBox="0 0 40 18" fill="none" aria-hidden="true"><path d="M1 12 L7 14 L13 6 L20 10 L27 4 L33 7 L39 3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" /></svg>
+              <span class="tile-num">{{ state.ideas.length }}</span>
+              <span class="tile-foot">Idee <ChevronRight :size="14" /></span>
+            </button>
+          </div>
+
+          <section class="card progress-card">
+            <div class="row-between">
+              <div>
+                <span class="eyebrow">Oggi, fin qui</span>
+                <strong>{{ doneToday }} di {{ todayTasks.length }} {{ completedWord(doneToday) }}</strong>
+              </div>
+              <div class="pct">{{ progressToday }}<small>%</small></div>
             </div>
-            <div class="side-column">
-              <section class="panel progress-panel"><div class="section-head compact"><div><div class="eyebrow">IL TUO PASSO</div><h2>Oggi, fin qui</h2></div><div class="ring" :style="{ '--progress': `${progressToday}%` }"><span>{{ progressToday }}<small>%</small></span></div></div><div class="progress-caption"><strong>{{ doneToday }} di {{ todayTasks.length }}</strong> cose completate</div><div class="progress-track"><span :style="{ width: `${progressToday}%` }"></span></div><div class="progress-foot"><span>Vai al tuo ritmo</span><span v-if="progressToday === 100">🌿</span></div></section>
-              <section class="panel focus-panel"><div class="section-head compact"><div><div class="eyebrow"><Target :size="13" /> FOCUS SETTIMANALE</div><h2>Il tuo filo conduttore</h2></div></div><p class="focus-quote">“{{ lastReview?.focus || 'Qual è la cosa che vuoi portare con te in questa settimana?' }}”</p><button class="inline-link" @click="switchTo('review')">{{ lastReview?.focus ? 'Rivedi il tuo focus' : 'Scegli il tuo focus' }} <ArrowRight :size="14" /></button></section>
-              <section class="panel mini-projects"><div class="section-head compact"><div><div class="eyebrow"><Flag :size="13" /> IN MOVIMENTO</div><h2>I tuoi progetti</h2></div><button class="icon-button small-icon" aria-label="Aggiungi progetto" @click="beginAdd('project')"><Plus :size="16" /></button></div><div v-if="state.projects.length" class="mini-project-list"><div v-for="project in state.projects.slice(0,3)" :key="project.id" class="mini-project"><div class="project-line"><span class="project-dot" :style="{ background: project.color }"></span><strong>{{ project.title }}</strong><span>{{ project.progress }}%</span></div><div class="progress-track mini-track"><span :style="{ width: `${project.progress}%`, background: project.color }"></span></div></div></div><div v-else class="mini-empty">I tuoi progetti appariranno qui.<button class="text-button" @click="beginAdd('project')">Crea un progetto <ArrowRight :size="14" /></button></div><button class="inline-link" @click="switchTo('projects')">Tutti i progetti <ArrowRight :size="14" /></button></section>
-              <section class="panel daily-thought"><div class="eyebrow"><Sparkles :size="13" /> UNA NOTA PER TE</div><p>La produttività non è fare di più. È fare spazio a quello che conta.</p><span>DAYLY, per le tue giornate migliori.</span></section>
+            <div class="bar"><span :style="{ width: `${progressToday}%` }"></span></div>
+          </section>
+
+          <section class="card">
+            <div class="card-head">
+              <h2>Le tre cose importanti<span class="head-sub">Scegli al massimo tre priorità al giorno</span></h2>
+              <button class="add-round" aria-label="Aggiungi una priorità" @click="beginAdd('task', { priority: true })"><Plus :size="17" /></button>
+            </div>
+            <div v-if="priorities.length" class="list">
+              <button v-for="(task, i) in priorities" :key="task.id" class="row" :class="{ 'is-done': task.done }" @click="toggleTask(task)">
+                <span class="row-rank">0{{ i + 1 }}</span>
+                <span class="row-body">
+                  <span class="type-label label-peach">Priorità</span>
+                  <span class="row-title">{{ task.title }}</span>
+                  <span v-if="task.time || projectName(task.projectId)" class="row-meta">{{ [formatTime(task.time), projectName(task.projectId)].filter(Boolean).join(' · ') }}</span>
+                </span>
+                <span class="check" :class="{ on: task.done }"><Check :size="14" /></span>
+              </button>
+            </div>
+            <div v-else class="empty">
+              <span class="empty-art tone-peach"><Flag :size="22" /></span>
+              <strong>Nessuna priorità per oggi</strong>
+              <p>Le priorità sono le poche cose che vuoi davvero portare a casa. Scegline una per iniziare.</p>
+              <button class="btn" @click="beginAdd('task', { priority: true })"><Plus :size="16" /> Scegli una priorità</button>
+            </div>
+          </section>
+
+          <div class="chips">
+            <button class="chip" :class="{ on: todayFilter === 'all' }" @click="todayFilter = 'all'">Tutte <span class="chip-count">{{ todayTasks.length }}</span></button>
+            <button class="chip" :class="{ on: todayFilter === 'event' }" @click="todayFilter = 'event'">Appuntamenti <span class="chip-count">{{ appointments.length }}</span></button>
+            <button class="chip" :class="{ on: todayFilter === 'free' }" @click="todayFilter = 'free'">Senza orario <span class="chip-count">{{ untimedTasks.length }}</span></button>
+            <button class="chip" :class="{ on: todayFilter === 'priority' }" @click="todayFilter = 'priority'">Priorità <span class="chip-count">{{ priorities.length }}</span></button>
+          </div>
+
+          <section class="card">
+            <div class="card-head">
+              <h2>Il ritmo di oggi<span class="head-sub">Tocca una riga per completarla</span></h2>
+              <button class="add-round" aria-label="Aggiungi un impegno" @click="beginAdd('task', { date: todayKey })"><Plus :size="17" /></button>
+            </div>
+            <div v-if="filteredToday.length" class="list">
+              <button v-for="task in filteredToday" :key="task.id" class="row" :class="{ 'is-done': task.done }" @click="toggleTask(task)">
+                <span class="row-icon" :class="`tone-${taskKind(task).tone}`"><component :is="taskKind(task).icon" :size="18" /></span>
+                <span class="row-body">
+                  <span class="type-label" :class="`label-${taskKind(task).tone}`">{{ taskKind(task).label }}</span>
+                  <span class="row-title">{{ task.title }}</span>
+                  <span class="row-meta">{{ [formatTime(task.time) || 'Quando vuoi', projectName(task.projectId)].filter(Boolean).join(' · ') }}</span>
+                </span>
+                <span class="check" :class="{ on: task.done }"><Check :size="14" /></span>
+              </button>
+            </div>
+            <div v-else class="empty">
+              <span class="empty-art tone-violet"><Clock3 :size="22" /></span>
+              <strong>{{ todayTasks.length ? 'Niente in questo filtro' : 'La giornata è ancora bianca' }}</strong>
+              <p>{{ todayTasks.length ? 'Prova un altro filtro qui sopra per vedere il resto della giornata.' : 'Aggiungi un appuntamento con un orario, oppure un’attività da fare quando vuoi.' }}</p>
+              <button class="btn" @click="beginAdd('task', { date: todayKey })"><Plus :size="16" /> Aggiungi un impegno</button>
+            </div>
+          </section>
+
+          <section class="card">
+            <div class="card-head">
+              <h2>Il tuo filo conduttore<span class="head-sub">Il focus di questa settimana</span></h2>
+              <button class="ghost-round" aria-label="Apri i riepiloghi" @click="switchTo('review')"><ChevronRight :size="18" /></button>
+            </div>
+            <p class="project-note">{{ lastReview?.focus || 'Non hai ancora scelto un focus. Una parola basta: è il promemoria a cui tornare quando la giornata si affolla.' }}</p>
+            <button class="add-line" @click="switchTo('review')">{{ lastReview?.focus ? 'Rivedi il focus' : 'Scegli il tuo focus' }}</button>
+          </section>
+
+          <section class="quote-card">
+            <Heart :size="20" style="flex:none;margin-top:2px" />
+            <p>Non serve fare tutto.<br /><strong>Serve fare il prossimo passo.</strong></p>
+          </section>
+        </section>
+
+        <!-- ─────────── CALENDARIO ─────────── -->
+        <section v-else-if="section === 'calendar'" class="page">
+          <div class="page-head">
+            <p class="date-line">{{ monthLabel }}</p>
+            <h1 class="page-title">Calendario</h1>
+          </div>
+
+          <section class="card">
+            <div class="cal-head">
+              <strong>{{ weekRange }}</strong>
+              <div class="cal-nav">
+                <button aria-label="Settimana precedente" @click="shiftWeek(-1)"><ArrowLeft :size="16" /></button>
+                <button class="today-chip" @click="goToday">Oggi</button>
+                <button aria-label="Settimana successiva" @click="shiftWeek(1)"><ArrowRight :size="16" /></button>
+              </div>
+            </div>
+            <div class="strip">
+              <button v-for="day in weekDays" :key="keyDate(day)" class="strip-day" :class="{ sel: keyDate(day) === selectedDate, 'is-today': keyDate(day) === todayKey }" @click="selectedDate = keyDate(day)">
+                <span>{{ weekdayShort(day) }}</span>
+                <strong>{{ day.getDate() }}</strong>
+                <i class="dot" :class="{ 'dot-hidden': !tasksOn(day).length }"></i>
+              </button>
+            </div>
+          </section>
+
+          <section class="card">
+            <div class="card-head">
+              <h2>{{ selectedDayLabel }}<span class="head-sub">{{ selectedTasks.length ? `${selectedTasks.filter(t => t.done).length} di ${selectedTasks.length} ${completedWord(selectedTasks.filter(t => t.done).length)}` : 'Nessun impegno per ora' }}</span></h2>
+              <button class="add-round" aria-label="Aggiungi in questo giorno" @click="beginAdd('task', { date: selectedDate })"><Plus :size="17" /></button>
+            </div>
+            <div v-if="selectedTasks.length" class="list">
+              <button v-for="task in selectedTasks" :key="task.id" class="row" :class="{ 'is-done': task.done }" @click="toggleTask(task)">
+                <span class="row-icon" :class="`tone-${taskKind(task).tone}`"><component :is="taskKind(task).icon" :size="18" /></span>
+                <span class="row-body">
+                  <span class="type-label" :class="`label-${taskKind(task).tone}`">{{ taskKind(task).label }}</span>
+                  <span class="row-title">{{ task.title }}</span>
+                  <span class="row-meta">{{ [formatTime(task.time) || 'Quando vuoi', projectName(task.projectId)].filter(Boolean).join(' · ') }}</span>
+                </span>
+                <span class="check" :class="{ on: task.done }"><Check :size="14" /></span>
+              </button>
+            </div>
+            <div v-else class="empty">
+              <span class="empty-art tone-sky"><CalendarDays :size="22" /></span>
+              <strong>Giornata libera</strong>
+              <p>Gli impegni con un orario finiscono in agenda; quelli senza restano flessibili e li sistemi quando vuoi.</p>
+              <button class="btn" @click="beginAdd('task', { date: selectedDate })"><Plus :size="16" /> Aggiungi un impegno</button>
+            </div>
+          </section>
+
+          <section class="card">
+            <div class="card-head"><h2>La settimana<span class="head-sub">{{ weekTasks.filter(t => t.done).length }} {{ completedWord(weekTasks.filter(t => t.done).length) }} su {{ weekTasks.length }}</span></h2></div>
+            <div class="bar"><span :style="{ width: `${weekTasks.length ? Math.round(weekTasks.filter(t => t.done).length / weekTasks.length * 100) : 0}%` }"></span></div>
+          </section>
+        </section>
+
+        <!-- ─────────── PROGETTI ─────────── -->
+        <section v-else-if="section === 'projects'" class="page">
+          <div class="page-head">
+            <p class="date-line">Un passo alla volta</p>
+            <h1 class="page-title">Progetti</h1>
+            <p class="page-sub">Le cose che crescono nel tempo. Sposta il cursore per aggiornare il progresso.</p>
+          </div>
+
+          <div v-if="state.projects.length" class="chips">
+            <button class="chip" :class="{ on: projectFilter === 'all' }" @click="projectFilter = 'all'">Tutti <span class="chip-count">{{ state.projects.length }}</span></button>
+            <button class="chip" :class="{ on: projectFilter === 'open' }" @click="projectFilter = 'open'">In corso <span class="chip-count">{{ state.projects.filter(p => Number(p.progress) < 100).length }}</span></button>
+            <button class="chip" :class="{ on: projectFilter === 'done' }" @click="projectFilter = 'done'">Completati <span class="chip-count">{{ state.projects.filter(p => Number(p.progress) >= 100).length }}</span></button>
+          </div>
+
+          <section v-if="state.projects.length" class="card progress-card">
+            <div class="row-between">
+              <div>
+                <span class="eyebrow">Progresso medio</span>
+                <strong>Stai andando avanti</strong>
+              </div>
+              <div class="pct">{{ projectProgress }}<small>%</small></div>
+            </div>
+            <div class="bar"><span :style="{ width: `${projectProgress}%` }"></span></div>
+          </section>
+
+          <section v-for="project in filteredProjects" :key="project.id" class="card project-card">
+            <div class="project-top">
+              <span class="project-icon" :style="{ background: project.color || '#E8E5FF' }"><Target :size="20" /></span>
+              <div style="flex:1;min-width:0">
+                <span class="type-label label-sky">{{ project.kind || 'Progetto personale' }}</span>
+                <h2>{{ project.title }}</h2>
+              </div>
+              <button class="ghost-round" :aria-label="`Elimina ${project.title}`" @click="deleteItem('projects', project)"><Trash2 :size="16" /></button>
+            </div>
+            <p v-if="project.notes" class="project-note">{{ project.notes }}</p>
+            <div class="row-between">
+              <span class="eyebrow">Progresso</span>
+              <strong style="font-family:Manrope,sans-serif;font-size:16px">{{ project.progress }}%</strong>
+            </div>
+            <input class="range" type="range" min="0" max="100" step="5" :value="project.progress" :style="{ background: `linear-gradient(90deg, var(--pill) ${project.progress}%, var(--line) ${project.progress}%)` }" :aria-label="`Progresso di ${project.title}`" @input="setProgress(project, $event.target.value)" />
+            <div class="range-scale"><span>Appena iniziato</span><span>Traguardo</span></div>
+          </section>
+
+          <div v-if="state.projects.length && !filteredProjects.length" class="card">
+            <div class="empty">
+              <span class="empty-art tone-sky"><Target :size="22" /></span>
+              <strong>Niente in questo filtro</strong>
+              <p>Cambia filtro qui sopra per vedere gli altri progetti.</p>
+            </div>
+          </div>
+
+          <div v-if="!state.projects.length" class="card">
+            <div class="empty">
+              <span class="empty-art tone-sky"><Target :size="22" /></span>
+              <strong>Nessun progetto, per ora</strong>
+              <p>Un progetto è una cosa che ti sta a cuore e richiede più di un giorno: un corso, un viaggio, un’abitudine. Qui tieni traccia di quanto sei avanti.</p>
+              <button class="btn" @click="beginAdd('project')"><Plus :size="16" /> Crea il primo progetto</button>
             </div>
           </div>
         </section>
 
-        <section v-else-if="section === 'calendar'" class="page">
-          <div class="page-heading plain-heading"><div><div class="date-kicker">SPAZIO ALLE TUE IDEE</div><h1>Il tuo <em>calendario.</em></h1><p class="subheading">Impegni fissi e cose da fare, insieme.</p></div><button class="primary-button" @click="beginAdd('task')"><Plus :size="16" /> Nuovo impegno</button></div>
-          <section class="panel calendar-panel"><div class="calendar-toolbar"><div><div class="eyebrow">VISTA SETTIMANALE</div><h2>{{ weekRange }}</h2></div><div class="calendar-controls"><button class="icon-button" aria-label="Settimana precedente" @click="calendarOffset--"><ArrowLeft :size="17" /></button><button class="today-button" @click="calendarOffset = 0">Oggi</button><button class="icon-button" aria-label="Settimana successiva" @click="calendarOffset++"><ArrowRight :size="17" /></button></div></div>
-            <div class="week-grid"><article v-for="day in weekDays" :key="keyDate(day)" class="day-column" :class="{ 'is-today': keyDate(day) === todayKey }"><div class="day-heading"><span>{{ new Intl.DateTimeFormat('it-IT', { weekday: 'short' }).format(day) }}</span><strong>{{ day.getDate() }}</strong></div><div class="day-events"><div v-for="task in tasksOn(day)" :key="task.id" class="event-card" :class="{ 'event-done': task.done, 'event-fixed': task.time }" @click="toggleTask(task)"><span v-if="task.time">{{ task.time }}</span><strong>{{ task.title }}</strong><small v-if="!task.time">Senza orario</small></div><button class="day-add" :aria-label="`Aggiungi a ${shortDate(day)}`" @click="beginAdd('task', { date: keyDate(day) })"><Plus :size="15" /></button></div></article></div>
-            <div class="calendar-legend"><span><i></i> Impegno fisso</span><span><i></i> Attività flessibile</span><span class="calendar-tip">Tocca un’attività per segnarla come completata</span></div>
-          </section>
-          <div class="calendar-bottom"><div><CalendarDays :size="19" /><div><strong>La flessibilità è parte del piano.</strong><span>Le attività senza orario restano libere: sistemale quando vuoi.</span></div></div><button class="inline-link" @click="switchTo('today')">Torna a oggi <ArrowRight :size="14" /></button></div>
-        </section>
-
-        <section v-else-if="section === 'projects'" class="page">
-          <div class="page-heading plain-heading"><div><div class="date-kicker">PICCOLI PASSI, GRANDI DIREZIONI</div><h1>Le cose che <em>crescono.</em></h1><p class="subheading">Progetti e obiettivi, al tuo ritmo.</p></div><button class="primary-button" @click="beginAdd('project')"><Plus :size="16" /> Nuovo progetto</button></div>
-          <div class="projects-overview"><div class="overview-copy"><span class="eyebrow">IL QUADRO GENERALE</span><h2>Stai andando avanti,<br /><em>un giorno alla volta.</em></h2><p>Il progresso non è una linea retta. Ogni passo conta.</p></div><div class="overview-number"><strong>{{ projectProgress }}<small>%</small></strong><span>progresso medio</span><div class="progress-track"><span :style="{ width: `${projectProgress}%` }"></span></div></div><div class="overview-flower">✳</div></div>
-          <div v-if="state.projects.length" class="project-grid"><article v-for="project in state.projects" :key="project.id" class="panel project-card"><div class="project-card-top"><span class="project-icon" :style="{ background: project.color }"><Target :size="19" /></span><button class="icon-button delete-icon" aria-label="Elimina progetto" @click="deleteItem('projects', project)"><Trash2 :size="16" /></button></div><div class="eyebrow">{{ project.kind || 'PROGETTO PERSONALE' }}</div><h2>{{ project.title }}</h2><p>{{ project.notes || 'Un passo alla volta: scegli tu il ritmo.' }}</p><div class="project-progress-label"><span>Progresso</span><strong>{{ project.progress }}%</strong></div><input class="range" type="range" min="0" max="100" step="5" :value="project.progress" :style="{ '--accent': project.color }" :aria-label="`Progresso ${project.title}`" @input="setProgress(project, $event.target.value)" /><div class="range-scale"><span>Appena iniziato</span><span>Traguardo</span></div></article><button class="panel add-project-card" @click="beginAdd('project')"><span class="add-circle"><Plus :size="20" /></span><strong>C’è altro che ti sta a cuore?</strong><span>Apri uno spazio per un nuovo progetto.</span></button></div>
-          <div v-else class="empty-large"><div class="empty-star">✳</div><h2>Ogni progetto inizia con un’intenzione.</h2><p>Crea il tuo primo spazio e tieni traccia dei progressi, senza fretta.</p><button class="primary-button" @click="beginAdd('project')"><Plus :size="16" /> Crea il primo progetto</button></div>
-        </section>
-
+        <!-- ─────────── IDEE ─────────── -->
         <section v-else-if="section === 'ideas'" class="page">
-          <div class="page-heading plain-heading"><div><div class="date-kicker">UNO SPAZIO PER LE COSE CHE TI VENGONO IN MENTE</div><h1>Le tue <em>idee.</em></h1><p class="subheading">Appunti veloci, senza dover decidere subito.</p></div><button class="primary-button" @click="beginAdd('idea')"><Plus :size="16" /> Nuova idea</button></div>
-          <div class="idea-intro"><Lightbulb :size="20" /><span>Un posto tranquillo dove lasciare le idee, prima che scappino.</span></div>
-          <div v-if="state.ideas.length" class="idea-grid"><article v-for="(idea, i) in state.ideas" :key="idea.id" class="idea-card" :class="`idea-tone-${i % 4}`"><div class="idea-card-top"><span class="idea-date">{{ new Intl.DateTimeFormat('it-IT', { day: 'numeric', month: 'long' }).format(new Date(idea.createdAt || Date.now())) }}</span><button class="icon-button" aria-label="Elimina idea" @click="deleteItem('ideas', idea)"><X :size="15" /></button></div><h2>{{ idea.title }}</h2><p>{{ idea.notes || 'Salvata per quando sarà il momento giusto.' }}</p><span class="idea-spark">✳</span></article><button class="idea-add-card" @click="beginAdd('idea')"><Plus :size="19" /><span>Lascia spazio a una nuova idea</span></button></div>
-          <div v-else class="empty-large ideas-empty"><div class="empty-star">✳</div><h2>Le idee non hanno bisogno di un piano.</h2><p>Segnale da qualche parte. Potrai tornarci quando vuoi.</p><button class="primary-button" @click="beginAdd('idea')"><Plus :size="16" /> Annota un’idea</button></div>
+          <div class="page-head">
+            <p class="date-line">Prima che scappino</p>
+            <h1 class="page-title">Idee</h1>
+            <p class="page-sub">Appunti veloci, senza dover decidere subito cosa farne.</p>
+          </div>
+
+          <div v-if="state.ideas.length" class="idea-grid">
+            <article v-for="(idea, i) in state.ideas" :key="idea.id" class="idea-card" :class="`idea-tone-${i % 4}`">
+              <div class="idea-top">
+                <span class="idea-date">{{ shortMonth(idea.createdAt) }}</span>
+                <button :aria-label="`Elimina ${idea.title}`" @click="deleteItem('ideas', idea)"><X :size="15" /></button>
+              </div>
+              <h2>{{ idea.title }}</h2>
+              <p>{{ idea.notes || 'Salvata per quando sarà il momento giusto.' }}</p>
+            </article>
+          </div>
+
+          <div v-else class="card">
+            <div class="empty">
+              <span class="empty-art tone-mint"><Lightbulb :size="22" /></span>
+              <strong>Nessuna idea annotata</strong>
+              <p>Un posto tranquillo dove lasciare quello che ti passa per la testa. Nessuna scadenza, nessun piano: ci torni quando vuoi.</p>
+              <button class="btn" @click="beginAdd('idea')"><Plus :size="16" /> Annota un’idea</button>
+            </div>
+          </div>
         </section>
 
+        <!-- ─────────── RIEPILOGHI ─────────── -->
         <section v-else-if="section === 'review'" class="page">
-          <div class="page-heading plain-heading"><div><div class="date-kicker">FARE SPAZIO, RIGUARDARE, RIPARTIRE</div><h1>Un momento per <em>te.</em></h1><p class="subheading">Piccole riflessioni, senza giudizio.</p></div></div>
-          <div class="review-grid"><section class="panel review-card daily-review"><div class="review-icon"><Moon :size="20" /></div><div class="eyebrow">STASERA · {{ new Intl.DateTimeFormat('it-IT', { day: 'numeric', month: 'long' }).format(today) }}</div><h2>Com’è andata, davvero?</h2><p>Non serve scrivere tanto. Anche una parola può bastare.</p><label for="daily-notes">Cosa vuoi ricordare di oggi?</label><textarea id="daily-notes" class="notes-area" :value="todayReview?.notes || ''" placeholder="Una cosa che è andata bene…"></textarea><div class="review-foot"><span>{{ doneToday }} cose portate a termine oggi</span><button class="primary-button" @click="saveDailyReview">Salva il riepilogo <ArrowRight :size="15" /></button></div></section>
-            <section class="panel review-card weekly-review"><div class="review-icon"><Compass :size="20" /></div><div class="eyebrow">LA TUA SETTIMANA</div><h2>Qual è il tuo filo conduttore?</h2><p>Una parola o un’intenzione a cui tornare, quando serve.</p><label for="weekly-focus">Il mio focus della settimana</label><textarea id="weekly-focus" class="notes-area focus-area" :value="lastReview?.focus || ''" placeholder="Per questa settimana, vorrei…"></textarea><div class="review-foot"><span>Un promemoria gentile per te.</span><button class="primary-button" @click="saveWeeklyFocus">Salva il focus <ArrowRight :size="15" /></button></div></section></div>
-          <section class="panel week-summary"><div><div class="eyebrow">GUARDA QUANTO HAI FATTO</div><h2>Questa settimana</h2><p>{{ weekTasks.filter(task => task.done).length }} attività completate su {{ weekTasks.length }}. Ogni passo ha il suo valore.</p></div><div class="week-big-number">{{ weekTasks.length ? Math.round(weekTasks.filter(task => task.done).length / weekTasks.length * 100) : 0 }}<small>%</small><span>del programmato</span></div></section>
+          <div class="page-head">
+            <p class="date-line">Un momento per te</p>
+            <h1 class="page-title">Riepiloghi</h1>
+            <p class="page-sub">Piccole riflessioni, senza giudizio.</p>
+          </div>
+
+          <section class="summary-card">
+            <div>
+              <h2>Questa settimana</h2>
+              <p>{{ weekTasks.filter(task => task.done).length }} attività {{ completedWord(weekTasks.filter(task => task.done).length) }} su {{ weekTasks.length }}. Ogni passo ha il suo valore.</p>
+            </div>
+            <div class="summary-big">{{ weekTasks.length ? Math.round(weekTasks.filter(task => task.done).length / weekTasks.length * 100) : 0 }}<small>%</small></div>
+          </section>
+
+          <section class="card">
+            <div class="card-head">
+              <h2>Com’è andata, davvero?<span class="head-sub">{{ longDate(today) }} · {{ doneToday }} {{ doneToday === 1 ? 'cosa portata' : 'cose portate' }} a termine</span></h2>
+              <span class="row-icon tone-violet"><Moon :size="18" /></span>
+            </div>
+            <label class="field-label" for="daily-notes">Cosa vuoi ricordare di oggi?</label>
+            <textarea id="daily-notes" class="notes" :value="todayReview?.notes || ''" placeholder="Una cosa che è andata bene…"></textarea>
+            <button class="btn btn-block" style="margin-top:14px" @click="saveDailyReview">Salva il riepilogo</button>
+          </section>
+
+          <section class="card">
+            <div class="card-head">
+              <h2>Qual è il tuo filo conduttore?<span class="head-sub">Una parola o un’intenzione per la settimana</span></h2>
+              <span class="row-icon tone-mint"><Compass :size="18" /></span>
+            </div>
+            <label class="field-label" for="weekly-focus">Il mio focus della settimana</label>
+            <textarea id="weekly-focus" class="notes" :value="lastReview?.focus || ''" placeholder="Per questa settimana, vorrei…"></textarea>
+            <button class="btn btn-block" style="margin-top:14px" @click="saveWeeklyFocus">Salva il focus</button>
+          </section>
         </section>
 
-        <section v-else-if="section === 'assistant'" class="page assistant-page">
-          <div class="page-heading plain-heading"><div><div class="date-kicker">UN PENSIERO IN PIÙ, QUANDO SERVE</div><h1>Facciamo ordine <em>insieme.</em></h1><p class="subheading">Un assistente gentile per aiutarti a fare spazio.</p></div></div>
-          <div class="assistant-layout"><section class="panel claude-connect"><div class="claude-mark"><img src="/logo.jpg" alt="" /></div><div class="eyebrow">CLAUDE · COLLEGAMENTO PERSONALE</div><h2>Usa Claude con il tuo piano</h2><p>DAYLY prepara un collegamento sicuro. Poi puoi chiedere a Claude di leggere agenda, progetti e idee, e proporre modifiche. I dati restano cifrati nel cloud; le funzioni locali continuano a funzionare offline.</p><div v-if="cloudSettings()" class="sync-status"><CheckCircle2 :size="16" /> {{ syncLabel }}</div><div class="claude-actions"><button class="primary-button" :disabled="cloudBusy" @click="connectClaude">{{ cloudBusy ? 'Preparo il collegamento…' : cloudSettings() ? 'Genera codice temporaneo per Claude' : 'Attiva la sincronizzazione protetta' }}</button><button v-if="cloudSettings()" class="text-button" @click="disconnectClaude">Revoca Claude e rinnova il codice segreto</button><button v-if="cloudSettings()" class="text-button danger-link" @click="deleteCloudCopy">Elimina anche la copia online</button><button v-if="cloudSettings()" class="secondary-button" @click="copyRecoveryCode">Copia codice di recupero per un altro iPhone</button></div><div v-if="!cloudSettings()" class="recovery-panel"><label for="recovery-code">Hai già un codice di recupero?</label><div><input id="recovery-code" v-model="recoveryInput" placeholder="ID.chiave personale" /><button class="secondary-button" @click="restoreCloudConnection">Ripristina</button></div></div><div v-if="pairingCode" class="pair-code"><span>CODICE TEMPORANEO · 5 MINUTI</span><code>{{ pairingCode }}</code><button class="secondary-button" @click="copyPairingCode">Copia il codice</button></div><ol class="connector-steps"><li>In Claude apri <strong>Impostazioni → Connettori → Aggiungi connettore personalizzato</strong>.</li><li>Inserisci <code>https://dayly-delta.vercel.app/api/mcp</code> e avvia la connessione.</li><li>Quando si apre la pagina DAYLY, incolla il codice temporaneo e autorizza.</li><li>In Claude chiedi di consultare DAYLY. Le modifiche richiedono una tua conferma esplicita.</li></ol><div class="cloud-cost-note"><strong>Privacy e costi.</strong> Il contenuto viene cifrato prima dell’invio; il codice temporaneo scade e puoi revocare Claude qui. Lo spazio Vercel Blob include quote mensili e può avere costi se superate, secondo il piano Vercel.</div></section>
-            <aside class="assistant-side"><section class="panel privacy-card"><div class="privacy-icon"><Heart :size="18" /></div><div class="eyebrow">UN AIUTO CON DELICATEZZA</div><h3>Le scelte restano tue.</h3><p>Claude legge i dati che hai scelto di sincronizzare. Può solo applicare modifiche dopo una tua conferma esplicita nella chat.</p><div class="privacy-rule"><CheckCircle2 :size="15" /> Dati cifrati prima della sincronizzazione</div><div class="privacy-rule"><CheckCircle2 :size="15" /> Nessuna chiave API AI nell’app</div><div class="privacy-rule"><CheckCircle2 :size="15" /> Revoca disponibile da DAYLY</div></section><section class="panel context-card"><div class="eyebrow">NELLA TUA GIORNATA</div><div class="context-row"><ListTodo :size="16" /><span>Attività</span><strong>{{ state.tasks.length }}</strong></div><div class="context-row"><Target :size="16" /><span>Progetti</span><strong>{{ state.projects.length }}</strong></div><div class="context-row"><Lightbulb :size="16" /><span>Idee</span><strong>{{ state.ideas.length }}</strong></div></section></aside></div>
-        </section>
-      </template>
-      <footer class="footer"><span>DAYLY <i>·</i> uno spazio tutto tuo</span><span>{{ cloudSettings() ? 'Locale · copia cifrata online' : 'Dati salvati in locale' }} <span class="footer-dot">●</span></span></footer>
-    </main>
+        <!-- ─────────── ASSISTENTE ─────────── -->
+        <section v-else-if="section === 'assistant'" class="page">
+          <div class="page-head">
+            <p class="date-line">Un pensiero in più</p>
+            <h1 class="page-title">Claude</h1>
+            <p class="page-sub">Collega DAYLY a Claude per farti aiutare con agenda, progetti e idee.</p>
+          </div>
 
-    <nav class="bottom-nav" aria-label="Navigazione mobile"><button v-for="item in nav.slice(0, 5)" :key="item.id" :class="{ active: section === item.id }" @click="switchTo(item.id)"><component :is="item.icon" :size="19" /><span>{{ item.label }}</span></button><button :class="{ active: section === 'assistant' }" @click="switchTo('assistant')"><MessageCircle :size="19" /><span>AI</span></button></nav>
+          <section class="card">
+            <div class="card-head">
+              <h2>Collegamento personale<span class="head-sub">{{ cloudSettings() ? syncLabel : 'Non ancora attivo' }}</span></h2>
+              <span class="row-icon tone-violet"><MessageCircle :size="18" /></span>
+            </div>
+            <p class="project-note">DAYLY prepara un collegamento sicuro. I dati vengono cifrati prima di partire e le funzioni locali continuano a funzionare offline.</p>
+
+            <button class="btn btn-block" style="margin-top:16px" :disabled="cloudBusy" @click="connectClaude">
+              {{ cloudBusy ? 'Preparo il collegamento…' : cloudSettings() ? 'Genera codice temporaneo' : 'Attiva la sincronizzazione protetta' }}
+            </button>
+
+            <div v-if="pairingCode" class="pair-code">
+              <span class="eyebrow">Codice temporaneo · 5 minuti</span>
+              <code>{{ pairingCode }}</code>
+              <button class="btn btn-soft" @click="copyPairingCode">Copia il codice</button>
+            </div>
+
+            <ol class="steps">
+              <li>In Claude apri <strong>Impostazioni → Connettori → Aggiungi connettore personalizzato</strong>.</li>
+              <li>Inserisci <code>https://dayly-delta.vercel.app/api/mcp</code> e avvia la connessione.</li>
+              <li>Quando si apre la pagina DAYLY, incolla il codice temporaneo e autorizza.</li>
+              <li>Chiedi a Claude di consultare DAYLY. Le modifiche richiedono una tua conferma.</li>
+            </ol>
+
+            <div v-if="!cloudSettings()">
+              <label class="field-label" for="recovery-code">Hai già un codice di recupero?</label>
+              <input id="recovery-code" class="input" v-model="recoveryInput" placeholder="ID.chiave personale" />
+              <button class="btn btn-soft btn-block" style="margin-top:10px" @click="restoreCloudConnection">Ripristina il collegamento</button>
+            </div>
+
+            <div v-else class="sheet-actions" style="flex-direction:column;gap:12px">
+              <button class="btn btn-soft btn-block" @click="copyRecoveryCode">Copia codice di recupero</button>
+              <button class="btn-ghost" @click="disconnectClaude">Revoca Claude e rinnova il codice segreto</button>
+              <button class="btn-ghost btn-danger" @click="deleteCloudCopy">Elimina la copia online</button>
+            </div>
+          </section>
+
+          <section class="card">
+            <div class="card-head"><h2>Le scelte restano tue</h2></div>
+            <div class="note-line"><CheckCircle2 :size="16" /><span>I dati vengono cifrati prima della sincronizzazione.</span></div>
+            <div class="note-line"><CheckCircle2 :size="16" /><span>Nessuna chiave API a pagamento dentro l’app.</span></div>
+            <div class="note-line"><CheckCircle2 :size="16" /><span>Puoi revocare il collegamento da qui, quando vuoi.</span></div>
+            <div class="warn-box"><CloudOff :size="16" /><span>Lo spazio Vercel Blob ha quote mensili incluse e può avere costi se le superi, secondo il tuo piano Vercel.</span></div>
+          </section>
+
+          <section class="card">
+            <div class="card-head"><h2>Nella tua giornata</h2></div>
+            <div class="stat-row"><ListTodo :size="17" /><span>Attività</span><strong>{{ state.tasks.length }}</strong></div>
+            <div class="stat-row"><Target :size="17" /><span>Progetti</span><strong>{{ state.projects.length }}</strong></div>
+            <div class="stat-row"><Lightbulb :size="17" /><span>Idee</span><strong>{{ state.ideas.length }}</strong></div>
+          </section>
+        </section>
+      </main>
+
+      <nav class="tabbar" aria-label="Navigazione principale">
+        <button class="tab" :class="{ on: section === 'today' }" @click="switchTo('today')"><Sun :size="20" /><span>Oggi</span><i class="tab-dot"></i></button>
+        <button class="tab" :class="{ on: section === 'calendar' }" @click="switchTo('calendar')"><CalendarDays :size="20" /><span>Calendario</span><i class="tab-dot"></i></button>
+        <button class="tab-add" :aria-label="quickAddLabel" @click="quickAdd"><Plus :size="26" /></button>
+        <button class="tab" :class="{ on: section === 'projects' }" @click="switchTo('projects')"><Target :size="20" /><span>Progetti</span><i class="tab-dot"></i></button>
+        <button class="tab" :class="{ on: ['ideas', 'review', 'assistant'].includes(section) }" @click="showSheet = true"><MoreHorizontal :size="20" /><span>Altro</span><i class="tab-dot"></i></button>
+      </nav>
+    </div>
+
+    <!-- foglio «Altro» -->
+    <div v-if="showSheet" class="backdrop" @click.self="showSheet = false">
+      <section class="sheet">
+        <div class="sheet-grip"></div>
+        <div class="sheet-head">
+          <div>
+            <h2>Altro</h2>
+            <p>Il resto del tuo spazio.</p>
+          </div>
+          <button class="ghost-round" aria-label="Chiudi" @click="showSheet = false"><X :size="18" /></button>
+        </div>
+        <button class="sheet-link" @click="switchTo('ideas')">
+          <span class="row-icon tone-mint"><Lightbulb :size="18" /></span>
+          <div><strong>Idee</strong><small>Appunti veloci da riprendere con calma</small></div>
+          <ChevronRight class="go" :size="18" />
+        </button>
+        <button class="sheet-link" @click="switchTo('review')">
+          <span class="row-icon tone-violet"><Moon :size="18" /></span>
+          <div><strong>Riepiloghi</strong><small>La riflessione di oggi e il focus della settimana</small></div>
+          <ChevronRight class="go" :size="18" />
+        </button>
+        <button class="sheet-link" @click="switchTo('assistant')">
+          <span class="row-icon tone-sky"><MessageCircle :size="18" /></span>
+          <div><strong>Claude</strong><small>Collega l’assistente ai tuoi dati cifrati</small></div>
+          <ChevronRight class="go" :size="18" />
+        </button>
+        <button class="sheet-link" @click="showSheet = false; beginAdd('backup')">
+          <span class="row-icon tone-peach"><Settings2 :size="18" /></span>
+          <div><strong>Impostazioni e backup</strong><small>{{ cloudSettings() ? 'Locale · copia cifrata online' : 'Dati salvati solo su questo iPhone' }}</small></div>
+          <ChevronRight class="go" :size="18" />
+        </button>
+      </section>
+    </div>
+
+    <!-- foglio di inserimento -->
+    <div v-if="modal && modal !== 'backup'" class="backdrop" @click.self="modal = null">
+      <section class="sheet">
+        <div class="sheet-grip"></div>
+        <form @submit.prevent="saveForm">
+          <div class="sheet-head">
+            <div>
+              <h2>{{ modal === 'task' ? 'Nuovo impegno' : modal === 'project' ? 'Nuovo progetto' : 'Nuova idea' }}</h2>
+              <p>{{ modal === 'task' ? 'Con un orario diventa un appuntamento, senza resta flessibile.' : modal === 'project' ? 'Qualcosa che cresce nel tempo, con una percentuale di avanzamento.' : 'Un appunto veloce, senza doverci pensare adesso.' }}</p>
+            </div>
+            <button type="button" class="ghost-round" aria-label="Chiudi" @click="modal = null"><X :size="18" /></button>
+          </div>
+
+          <label class="field-label" for="entry-title">{{ modal === 'task' ? 'Cosa vuoi ricordarti?' : 'Dagli un nome' }}</label>
+          <input id="entry-title" class="input" v-model="form.title" autofocus required
+            :placeholder="modal === 'task' ? 'Es. Preparare la presentazione' : modal === 'project' ? 'Es. Imparare qualcosa di nuovo' : 'Es. Un’idea per il weekend'" />
+
+          <template v-if="modal === 'task'">
+            <label class="field-label" for="entry-date">Quando?</label>
+            <div class="date-time-row">
+              <input id="entry-date" class="input" v-model="form.date" type="date" />
+              <input class="input" v-model="form.time" type="time" aria-label="Orario (facoltativo)" />
+            </div>
+            <label class="check-label"><input v-model="form.priority" type="checkbox" /> È una delle mie tre priorità</label>
+            <template v-if="state.projects.length">
+              <label class="field-label" for="entry-project">Collega a un progetto</label>
+              <select id="entry-project" class="input" v-model="form.projectId">
+                <option value="">Nessun progetto</option>
+                <option v-for="project in state.projects" :key="project.id" :value="project.id">{{ project.title }}</option>
+              </select>
+            </template>
+          </template>
+
+          <template v-else>
+            <label class="field-label" for="entry-notes">Una nota (facoltativa)</label>
+            <textarea id="entry-notes" class="notes" v-model="form.notes" placeholder="Aggiungi un piccolo dettaglio…"></textarea>
+          </template>
+
+          <template v-if="modal === 'project'">
+            <label class="field-label" for="entry-progress">Progresso iniziale · {{ form.progress }}%</label>
+            <input id="entry-progress" class="range" v-model="form.progress" type="range" min="0" max="100" step="5" :style="{ background: `linear-gradient(90deg, var(--pill) ${form.progress}%, var(--line) ${form.progress}%)` }" />
+            <label class="field-label" for="entry-kind">Tipo</label>
+            <select id="entry-kind" class="input" v-model="form.kind">
+              <option>Progetto personale</option>
+              <option>Obiettivo</option>
+            </select>
+          </template>
+
+          <div class="sheet-actions">
+            <button type="button" class="btn btn-soft" @click="modal = null">Annulla</button>
+            <button type="submit" class="btn"><Check :size="16" /> Salva</button>
+          </div>
+        </form>
+      </section>
+    </div>
+
+    <!-- foglio impostazioni e backup -->
+    <div v-if="modal === 'backup'" class="backdrop" @click.self="modal = null">
+      <section class="sheet">
+        <div class="sheet-grip"></div>
+        <div class="sheet-head">
+          <div>
+            <h2>Impostazioni e backup</h2>
+            <p>Attività, progetti, idee e riflessioni sono salvati su questo dispositivo.</p>
+          </div>
+          <button class="ghost-round" aria-label="Chiudi" @click="modal = null"><X :size="18" /></button>
+        </div>
+
+        <button class="backup-row" @click="exportBackup">
+          <span><ArrowDownToLine :size="18" /></span>
+          <div><strong>Esporta una copia</strong><small>Salva tutti i dati in un file JSON</small></div>
+          <ChevronRight :size="17" />
+        </button>
+        <button class="backup-row" @click="importInput?.click()">
+          <span><Upload :size="18" /></span>
+          <div><strong>Ripristina una copia</strong><small>Importa un backup DAYLY già salvato</small></div>
+          <ChevronRight :size="17" />
+        </button>
+        <input ref="importInput" type="file" accept="application/json,.json" hidden @change="importBackup" />
+        <button class="backup-row" @click="modal = null; switchTo('assistant')">
+          <span><MessageCircle :size="18" /></span>
+          <div><strong>Collegamento Claude</strong><small>{{ cloudSettings() ? syncLabel : 'Non ancora attivo' }}</small></div>
+          <ChevronRight :size="17" />
+        </button>
+
+        <div class="warn-box">
+          <CloudOff :size="16" />
+          <span>Su iPhone iOS può rimuovere i dati del sito se lo spazio è poco o se cancelli i dati di navigazione. Tieni una copia in File o iCloud Drive.</span>
+        </div>
+
+        <div class="meta-row">
+          <span>Attività<strong>{{ state.tasks.length }}</strong></span>
+          <span>Progetti<strong>{{ state.projects.length }}</strong></span>
+          <span>Idee<strong>{{ state.ideas.length }}</strong></span>
+        </div>
+      </section>
+    </div>
+
     <div v-if="toast" class="toast"><CheckCircle2 :size="17" /> {{ toast }}</div>
-
-    <div v-if="modal && modal !== 'backup'" class="modal-backdrop" @click.self="modal = null"><section class="modal-card"><div class="modal-head"><div><span class="eyebrow">{{ modal === 'task' ? 'IL TUO TEMPO' : modal === 'project' ? 'QUALCOSA CHE TI STA A CUORE' : 'TUTTE LE IDEE COMINCIANO DA QUI' }}</span><h2>{{ modal === 'task' ? 'Aggiungi un impegno' : modal === 'project' ? 'Apri un nuovo progetto' : 'Annota un’idea' }}</h2></div><button class="icon-button" aria-label="Chiudi" @click="modal = null"><X :size="19" /></button></div><form class="entry-form" @submit.prevent="saveForm"><label for="entry-title">{{ modal === 'task' ? 'Cosa vuoi ricordarti?' : 'Dagli un nome' }}</label><input id="entry-title" v-model="form.title" autofocus required :placeholder="modal === 'task' ? 'Es. Preparare la presentazione' : modal === 'project' ? 'Es. Imparare qualcosa di nuovo' : 'Es. Un’idea per il weekend'" /><label v-if="modal === 'task'" for="entry-date">Quando?</label><div v-if="modal === 'task'" class="date-time-row"><input id="entry-date" v-model="form.date" type="date" /><input v-model="form.time" type="time" aria-label="Orario facoltativo" /><span>Senza orario va benissimo</span></div><label v-if="modal === 'task'" class="check-label"><input v-model="form.priority" type="checkbox" /> È una delle mie tre priorità</label><label v-if="modal === 'task' && state.projects.length" for="entry-project">Collega a un progetto</label><select v-if="modal === 'task' && state.projects.length" id="entry-project" v-model="form.projectId"><option value="">Nessun progetto</option><option v-for="project in state.projects" :key="project.id" :value="project.id">{{ project.title }}</option></select><label v-if="modal !== 'task'" for="entry-notes">Una nota (facoltativa)</label><textarea v-if="modal !== 'task'" id="entry-notes" v-model="form.notes" rows="3" placeholder="Aggiungi un piccolo dettaglio…"></textarea><template v-if="modal === 'project'"><label for="entry-progress">Il tuo progresso iniziale</label><div class="progress-input-row"><input id="entry-progress" v-model="form.progress" type="range" min="0" max="100" step="5" /><strong>{{ form.progress }}%</strong></div><label for="entry-kind">Tipo</label><select id="entry-kind" v-model="form.kind"><option>PROGETTO PERSONALE</option><option>OBIETTIVO</option></select></template><div class="modal-actions"><button type="button" class="secondary-button" @click="modal = null">Annulla</button><button type="submit" class="primary-button"><Check :size="15" /> Salva</button></div></form></section></div>
-    <div v-if="modal === 'backup'" class="modal-backdrop" @click.self="modal = null"><section class="modal-card backup-modal"><div class="modal-head"><div><span class="eyebrow">I TUOI DATI, SEMPRE TUOI</span><h2>Impostazioni e backup</h2></div><button class="icon-button" aria-label="Chiudi" @click="modal = null"><X :size="19" /></button></div><p>Le tue attività, i progetti, le idee e le riflessioni sono salvate sul dispositivo. Crea una copia ogni tanto per tenerle al sicuro.</p><div class="backup-actions"><button class="backup-action" @click="exportBackup"><span><ArrowDownToLine :size="18" /></span><div><strong>Esporta una copia</strong><small>Salva tutti i dati in un file JSON.</small></div><ArrowRight :size="16" /></button><button class="backup-action" @click="importInput?.click()"><span><Upload :size="18" /></span><div><strong>Ripristina una copia</strong><small>Importa un backup DAYLY già salvato.</small></div><ArrowRight :size="16" /></button><input ref="importInput" type="file" accept="application/json,.json" hidden @change="importBackup" /></div><div class="backup-warning"><CloudOff :size="17" /><span>Su iPhone, i dati del sito possono essere rimossi da iOS se lo spazio è limitato o se elimini i dati di navigazione. Conserva una copia in File o iCloud Drive.</span></div><div class="backup-meta"><span>Progetti <strong>{{ state.projects.length }}</strong></span><span>Attività <strong>{{ state.tasks.length }}</strong></span><span>Idee <strong>{{ state.ideas.length }}</strong></span></div></section></div>
   </div>
 </template>
