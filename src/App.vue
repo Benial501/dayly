@@ -42,9 +42,6 @@ const projectProgress = computed(() => state.value.projects.length ? Math.round(
 /* quanto resta la schermata d'apertura, in millisecondi */
 const SPLASH_MS = 3000
 
-// il logo lo genera prebuild: riferito a runtime, così se manca la build
-// passa comunque e l'immagine resta semplicemente vuota
-const logoUrl = '/logo.jpg'
 const soundOn = ref(sound.enabled)
 function switchSound() { sound.enabled = !soundOn.value; soundOn.value = sound.enabled }
 
@@ -869,7 +866,6 @@ function openCapture() {
     <div class="phone">
       <header class="appbar">
         <div class="appbar-id">
-          <img class="avatar" :src="logoUrl" alt="" />
           <div>
             <span class="appbar-kicker">{{ greeting }}</span>
             <strong>Christian</strong>

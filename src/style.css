@@ -98,12 +98,6 @@ h1, h2, h3, p { margin: 0; }
   padding: calc(env(safe-area-inset-top) + 20px) 22px 10px;
 }
 .appbar-id { display: flex; align-items: center; gap: 12px; min-width: 0; }
-.avatar {
-  width: 42px; height: 42px; flex: none;
-  border-radius: 14px;
-  object-fit: cover;
-  box-shadow: var(--shadow-soft);
-}
 .appbar-kicker {
   display: block;
   font-size: 12px;
