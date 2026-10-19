@@ -2,5 +2,9 @@
   "framework": "vite",
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
-  "installCommand": "npm install"
+  "installCommand": "npm install",
+  "rewrites": [
+    { "source": "/assets/index-BacNJe8E.js", "destination": "/assets/app.js" },
+    { "source": "/assets/index-gPuAsw7w.css", "destination": "/assets/app.css" }
+  ]
 }
