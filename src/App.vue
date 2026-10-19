@@ -123,11 +123,17 @@ async function askAssistant() {
 }
 async function applyProposal() {
   if (!proposal.value) return
+  const priorityCounts = new Map()
+  for (const task of state.value.tasks) {
+    if (task.priority) priorityCounts.set(task.date, (priorityCounts.get(task.date) || 0) + 1)
+  }
   for (const action of proposal.value.actions) {
     if (action.type === 'create_task' && typeof action.title === 'string') {
       const date = /^\d{4}-\d{2}-\d{2}$/.test(action.date) ? action.date : todayKey
       const projectId = state.value.projects.find(project => project.title.toLowerCase() === String(action.project || '').toLowerCase())?.id || ''
-      await put('tasks', { id: newId(), title: action.title, date, time: /^\d{2}:\d{2}$/.test(action.time) ? action.time : '', done: false, priority: Boolean(action.priority), projectId, createdAt: Date.now() })
+      const priority = Boolean(action.priority) && (priorityCounts.get(date) || 0) < 3
+      if (priority) priorityCounts.set(date, (priorityCounts.get(date) || 0) + 1)
+      await put('tasks', { id: newId(), title: action.title, date, time: /^\d{2}:\d{2}$/.test(action.time) ? action.time : '', done: false, priority, projectId, createdAt: Date.now() })
     }
     if (action.type === 'update_progress') {
       const project = state.value.projects.find(item => item.id === action.projectId || item.title.toLowerCase() === String(action.project || '').toLowerCase())
