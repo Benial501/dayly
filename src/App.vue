@@ -1,6 +1,6 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
-import { ArrowDownToLine, ArrowLeft, ArrowRight, CalendarDays, Check, CheckCircle2, ChevronRight, Clock3, CloudOff, Compass, Flag, Heart, Lightbulb, ListTodo, MessageCircle, Moon, MoreHorizontal, Plus, Settings2, Sun, Target, Trash2, Upload, X } from 'lucide-vue-next'
+import { ArrowDownToLine, ArrowLeft, ArrowRight, PenLine, RefreshCw, Sparkles, CalendarDays, Check, CheckCircle2, ChevronRight, Clock3, CloudOff, Compass, Flag, Heart, Lightbulb, ListTodo, MessageCircle, Moon, MoreHorizontal, Plus, Settings2, Sun, Target, Trash2, Upload, X } from 'lucide-vue-next'
 import { readAll, put, remove, replaceAll } from './db'
 
 const section = ref('today')
@@ -77,6 +77,7 @@ async function loadInitialState() {
   const account = cloudSettings()
   if (account && navigator.onLine) {
     try { if (account.dirty) await syncLocal(true); else await hydrateCloud(account) } catch { syncLabel.value = 'Dati locali · sincronizzazione da verificare' }
+    fetchProposals()
   }
 }
 async function syncLocal(showError = false) {
@@ -244,6 +245,7 @@ const nextAppointment = computed(() => {
   return open.find(task => task.time >= clock) || open[0] || null
 })
 const syncState = computed(() => {
+  if (proposalCount.value) return { label: `Claude ha ${proposalCount.value} ${proposalCount.value === 1 ? 'proposta' : 'proposte'} per te`, tone: 'violet', icon: Sparkles }
   if (!isOnline.value) return { label: 'Offline · le funzioni locali restano attive', tone: 'peach', icon: CloudOff }
   if (/ricarica|verificare/i.test(syncLabel.value)) return { label: 'Dati cambiati altrove · ricarica prima di modificare', tone: 'peach', icon: CloudOff }
   if (cloudSettings()) return { label: syncLabel.value, tone: 'mint', icon: CheckCircle2 }
@@ -306,6 +308,275 @@ function taskKind(task) {
 function rowMeta(task) { return [formatTime(task.time), projectName(task.projectId)].filter(Boolean).join(' · ') }
 function slotLabel(index) { return ['Scegli la prima priorità', 'Scegli la seconda', 'Scegli la terza'][index] }
 function completedWord(count) { return Number(count) === 1 ? 'completata' : 'completate' }
+
+/* ───────────────────────────────────────────────────────────
+   Cattura veloce: scrivi in italiano, DAYLY riconosce da sola
+   data, orario, priorità e progetti. Nessuna rete, nessun costo.
+   ─────────────────────────────────────────────────────────── */
+const captureInput = ref('')
+const pending = ref([])
+const captureNotes = ref([])
+const captureExamples = [
+  'domani alle 15 dentista',
+  '! chiamare Marco',
+  'giovedì 9:30 presentazione per il cliente',
+]
+
+const WEEKDAYS = { domenica: 0, lunedi: 1, martedi: 2, mercoledi: 3, giovedi: 4, venerdi: 5, sabato: 6 }
+const WEEKDAY_PATTERNS = { domenica: 'domenica', lunedi: 'luned[\u00eci]', martedi: 'marted[\u00eci]', mercoledi: 'mercoled[\u00eci]', giovedi: 'gioved[\u00eci]', venerdi: 'venerd[\u00eci]', sabato: 'sabato' }
+const MONTHS = { gennaio: 0, febbraio: 1, marzo: 2, aprile: 3, maggio: 4, giugno: 5, luglio: 6, agosto: 7, settembre: 8, ottobre: 9, novembre: 10, dicembre: 11 }
+
+function plain(value) { return String(value).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase() }
+function dayAfter(days) { const date = new Date(today); date.setDate(date.getDate() + days); return keyDate(date) }
+function nextWeekday(target) {
+  const date = new Date(today)
+  const ahead = (target - date.getDay() + 7) % 7
+  date.setDate(date.getDate() + (ahead === 0 ? 7 : ahead))
+  return keyDate(date)
+}
+function monthDay(day, month) {
+  const date = new Date(today.getFullYear(), month ?? today.getMonth(), day)
+  if (keyDate(date) < todayKey) date.setFullYear(date.getFullYear() + (month === undefined ? 0 : 1), month === undefined ? date.getMonth() + 1 : month, day)
+  return keyDate(date)
+}
+
+function projectByWords(text) {
+  const words = plain(text).replace(/\d+\s*%/g, ' ').split(/[^a-z]+/).filter(word => word.length >= 4)
+  if (!words.length) return null
+  return state.value.projects.find(project => words.some(word => plain(project.title).includes(word))) || null
+}
+
+function splitCapture(text) {
+  return text
+    .split(/\n|;|,?\s+(?:e\s+)?poi\s+|,\s*(?:e\s+)?poi\s+/i)
+    .map(line => line.trim())
+    .filter(Boolean)
+    .slice(0, 20)
+}
+
+function parseCaptureLine(line) {
+  let rest = ` ${line} `
+  let priority = false
+
+  if (/^\s*!/.test(rest)) { priority = true; rest = rest.replace(/^\s*!\s*/, ' ') }
+  if (/\b(priorita|importante)\b/.test(plain(rest))) {
+    priority = true
+    rest = rest.replace(/\b(priorit[àa]|important\w*)/gi, ' ')
+  }
+
+  const progressMatch = rest.match(/(\d{1,3})\s*%/)
+  let project = state.value.projects.find(item => item.title && plain(rest).includes(plain(item.title))) || null
+  if (!project && progressMatch) project = projectByWords(rest)
+  if (project && progressMatch) {
+    return { tipo: 'aggiorna_progresso', titolo: '', data: '', ora: '', priorita: false, progetto: project.title, progresso: Math.max(0, Math.min(100, Number(progressMatch[1]))) }
+  }
+
+  let date = ''
+  const flat = plain(rest)
+  const dayMonth = rest.match(/\b(\d{1,2})[\/-](\d{1,2})(?:[\/-](\d{2,4}))?\b/)
+  const writtenDate = flat.match(/\b(?:il\s+)?(\d{1,2})\s+(gennaio|febbraio|marzo|aprile|maggio|giugno|luglio|agosto|settembre|ottobre|novembre|dicembre)\b/)
+  const weekday = flat.match(/\b(?:il\s+|di\s+)?(domenica|lunedi|martedi|mercoledi|giovedi|venerdi|sabato)\b/)
+
+  if (/\bdopodomani\b/.test(flat)) { date = dayAfter(2); rest = rest.replace(/\bdopodomani\b/gi, ' ') }
+  else if (/\bdomani\b/.test(flat)) { date = dayAfter(1); rest = rest.replace(/\bdomani\b/gi, ' ') }
+  else if (/\boggi\b/.test(flat)) { date = todayKey; rest = rest.replace(/\boggi\b/gi, ' ') }
+  else if (writtenDate) { date = monthDay(Number(writtenDate[1]), MONTHS[writtenDate[2]]); rest = rest.replace(new RegExp(`\\b(?:il\\s+)?${writtenDate[1]}\\s+\\S+`, 'i'), ' ') }
+  else if (dayMonth) { date = monthDay(Number(dayMonth[1]), Number(dayMonth[2]) - 1); rest = rest.replace(dayMonth[0], ' ') }
+  else if (weekday) {
+    date = nextWeekday(WEEKDAYS[weekday[1]])
+    rest = rest.replace(new RegExp(`(?:\\b(?:il|di)\\s+)?${WEEKDAY_PATTERNS[weekday[1]]}(?:\\s+prossim[oa])?`, 'i'), ' ')
+  }
+  else {
+    const bareDay = flat.match(/\bil\s+(\d{1,2})\b/)
+    if (bareDay) { date = monthDay(Number(bareDay[1])); rest = rest.replace(/\bil\s+\d{1,2}\b/i, ' ') }
+  }
+
+  let time = ''
+  const spoken = rest.match(/\b(?:alle|alle\s+ore|ore|h)\s*(\d{1,2})(?:[:.](\d{2}))?\b/i)
+  const digits = rest.match(/\b(\d{1,2})[:.](\d{2})\b/)
+  if (spoken) { time = `${String(spoken[1]).padStart(2, '0')}:${spoken[2] || '00'}`; rest = rest.replace(spoken[0], ' ') }
+  else if (digits) { time = `${String(digits[1]).padStart(2, '0')}:${digits[2]}`; rest = rest.replace(digits[0], ' ') }
+  if (time && Number(time.slice(0, 2)) > 23) time = ''
+
+  let title = rest
+    .replace(/\b(devo|ho da|ricordarmi di|ricordati di|bisogna)\b/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .replace(/^[\s,.:;-]+|[\s,.:;-]+$/g, '')
+  if (!/[a-z\u00e0-\u00ff]{2}/i.test(title)) return null
+  title = title.charAt(0).toUpperCase() + title.slice(1)
+
+  return {
+    tipo: 'aggiungi_attivita',
+    titolo: title.slice(0, 160),
+    data: date || todayKey,
+    ora: time,
+    priorita: priority,
+    progetto: project?.title || '',
+    progresso: 0,
+  }
+}
+
+function runCapture() {
+  const lines = splitCapture(captureInput.value)
+  if (!lines.length) return
+  const parsed = []
+  const skipped = []
+  for (const line of lines) {
+    const change = parseCaptureLine(line)
+    if (change) parsed.push({ ...change, id: newId(), origine: 'locale' })
+    else skipped.push(line)
+  }
+  pending.value = parsed
+  captureNotes.value = skipped
+  if (parsed.length) captureInput.value = ''
+}
+
+/* ── proposte arrivate da Claude tramite il connettore ── */
+const claudeProposals = ref([])
+const proposalsBusy = ref(false)
+const pendingSource = ref([])
+
+const proposalCount = computed(() => claudeProposals.value.reduce((total, proposal) => total + (proposal.modifiche?.length || 0), 0))
+const proposalNote = computed(() => claudeProposals.value.map(proposal => proposal.nota).filter(Boolean).join(' ') )
+
+async function fetchProposals(showError = false) {
+  const account = cloudSettings()
+  if (!account || !navigator.onLine || proposalsBusy.value) return
+  proposalsBusy.value = true
+  try {
+    const response = await fetch(`/api/proposals?accountId=${encodeURIComponent(account.accountId)}`, { headers: { Authorization: `Bearer ${account.credential}` } })
+    if (!response.ok) throw new Error('Non riesco a leggere le proposte.')
+    claudeProposals.value = (await response.json()).proposte || []
+  } catch (error) {
+    if (showError) ping(error.message)
+  } finally {
+    proposalsBusy.value = false
+  }
+}
+
+async function clearProposals(ids) {
+  const account = cloudSettings()
+  if (!account || !ids.length) return
+  for (const id of ids) {
+    try {
+      await fetch('/api/proposals', {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${account.credential}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ accountId: account.accountId, id }),
+      })
+    } catch { /* la proposta scade da sola dopo sette giorni */ }
+  }
+  claudeProposals.value = claudeProposals.value.filter(proposal => !ids.includes(proposal.id))
+}
+
+function openClaudeProposals() {
+  pendingSource.value = claudeProposals.value.map(proposal => proposal.id)
+  pending.value = claudeProposals.value.flatMap(proposal => (proposal.modifiche || []).map(change => ({
+    tipo: change.tipo,
+    titolo: change.titolo || '',
+    data: change.data || '',
+    ora: change.ora || '',
+    priorita: !!change.priorita,
+    progetto: change.progetto || '',
+    progresso: Number(change.progresso) || 0,
+    id: newId(),
+    origine: 'claude',
+  })))
+}
+
+async function dismissPending() {
+  const sources = pendingSource.value.slice()
+  pending.value = []
+  pendingSource.value = []
+  if (sources.length) { await clearProposals(sources); ping('Proposte rifiutate') }
+}
+
+/* ── anteprima condivisa: cattura veloce e proposte di Claude ── */
+function discardPending(id) { pending.value = pending.value.filter(change => change.id !== id) }
+
+function pendingKind(change) {
+  if (change.tipo === 'aggiungi_attivita') return change.ora ? 'Appuntamento' : 'Quando vuoi'
+  if (change.tipo === 'sposta_attivita') return 'Da spostare'
+  if (change.tipo === 'completa_attivita') return 'Da completare'
+  return 'Progresso progetto'
+}
+function pendingTone(change) {
+  if (change.tipo === 'aggiungi_attivita') return change.ora ? 'sky' : 'violet'
+  if (change.tipo === 'sposta_attivita') return 'peach'
+  if (change.tipo === 'completa_attivita') return 'mint'
+  return 'sky'
+}
+function pendingIcon(change) {
+  if (change.tipo === 'aggiungi_attivita') return change.ora ? Clock3 : ListTodo
+  if (change.tipo === 'sposta_attivita') return ArrowRight
+  if (change.tipo === 'completa_attivita') return Check
+  return Target
+}
+function pendingTitle(change) { return change.tipo === 'aggiorna_progresso' ? change.progetto : change.titolo }
+function pendingMeta(change) {
+  if (change.tipo === 'aggiorna_progresso') return `Al ${Math.max(0, Math.min(100, Number(change.progresso) || 0))}%`
+  if (change.tipo === 'completa_attivita') return 'Segnata come fatta'
+  const parts = []
+  if (/^\d{4}-\d{2}-\d{2}$/.test(change.data || '')) parts.push(change.data === todayKey ? 'Oggi' : longDate(new Date(`${change.data}T12:00:00`)))
+  parts.push(change.ora || 'quando vuoi')
+  if (change.priorita) parts.push('priorità')
+  if (change.progetto && change.tipo === 'aggiungi_attivita') parts.push(change.progetto)
+  return parts.join(' · ')
+}
+
+function findTaskByTitle(title) {
+  const wanted = plain(String(title || '').trim())
+  return state.value.tasks.find(task => plain(task.title.trim()) === wanted) || null
+}
+function findProjectByTitle(title) {
+  const wanted = plain(String(title || '').trim())
+  if (!wanted) return null
+  return state.value.projects.find(project => plain(project.title.trim()) === wanted) || null
+}
+
+async function applyPending() {
+  const changes = pending.value.slice()
+  if (!changes.length) return
+  let applied = 0
+  for (const change of changes) {
+    if (change.tipo === 'aggiungi_attivita') {
+      if (!String(change.titolo || '').trim() || !/^\d{4}-\d{2}-\d{2}$/.test(change.data || '')) continue
+      const alreadyThree = state.value.tasks.filter(task => task.date === change.data && task.priority).length >= 3
+      await put('tasks', {
+        id: newId(),
+        title: String(change.titolo).trim().slice(0, 160),
+        date: change.data,
+        time: /^\d{2}:\d{2}$/.test(change.ora || '') ? change.ora : '',
+        priority: !!change.priorita && !alreadyThree,
+        done: false,
+        projectId: findProjectByTitle(change.progetto)?.id || '',
+        updatedAt: Date.now(),
+      })
+      applied++
+    } else if (change.tipo === 'sposta_attivita') {
+      const task = findTaskByTitle(change.titolo)
+      if (!task || !/^\d{4}-\d{2}-\d{2}$/.test(change.data || '')) continue
+      await put('tasks', { ...task, date: change.data, time: /^\d{2}:\d{2}$/.test(change.ora || '') ? change.ora : task.time, updatedAt: Date.now() })
+      applied++
+    } else if (change.tipo === 'completa_attivita') {
+      const task = findTaskByTitle(change.titolo)
+      if (!task) continue
+      await put('tasks', { ...task, done: true, updatedAt: Date.now() })
+      applied++
+    } else if (change.tipo === 'aggiorna_progresso') {
+      const project = findProjectByTitle(change.progetto)
+      if (!project) continue
+      await put('projects', { ...project, progress: Math.max(0, Math.min(100, Number(change.progresso) || 0)) })
+      applied++
+    }
+  }
+  const sources = pendingSource.value.slice()
+  pending.value = []
+  pendingSource.value = []
+  if (sources.length) await clearProposals(sources)
+  await refreshAndSync()
+  ping(applied ? `${applied} ${applied === 1 ? 'cosa aggiunta' : 'cose aggiunte'}` : 'Non sono riuscito ad aggiungere nulla')
+}
 function quickAdd() {
   if (section.value === 'projects') return beginAdd('project')
   if (section.value === 'ideas') return beginAdd('idea')
@@ -342,10 +613,28 @@ function quickAdd() {
             <h1 class="page-title">La tua giornata</h1>
           </div>
 
-          <button class="status-row" :class="`status-${syncState.tone}`" @click="beginAdd('backup')">
+          <button class="status-row" :class="`status-${syncState.tone}`" @click="proposalCount ? openClaudeProposals() : beginAdd('backup')">
             <component :is="syncState.icon" :size="15" />
             <span>{{ syncState.label }}</span>
             <ChevronRight :size="15" />
+          </button>
+
+          <section v-if="proposalCount" class="card proposal-card">
+            <div class="card-head">
+              <h2>Claude ha lavorato per te<span class="head-sub">{{ proposalCount }} {{ proposalCount === 1 ? 'proposta' : 'proposte' }} in attesa</span></h2>
+              <span class="row-icon tone-violet"><Sparkles :size="18" /></span>
+            </div>
+            <p v-if="proposalNote" class="project-note">{{ proposalNote }}</p>
+            <button class="btn btn-block" style="margin-top:14px" @click="openClaudeProposals">Guarda cosa propone</button>
+          </section>
+
+          <button class="capture-shortcut" @click="switchTo('capture')">
+            <span class="row-icon tone-violet"><PenLine :size="18" /></span>
+            <span>
+              <strong>Scrivi più cose insieme</strong>
+              <small>«domani alle 15 dentista» e le metto in agenda</small>
+            </span>
+            <ChevronRight :size="18" />
           </button>
 
           <section class="card status-card">
@@ -473,6 +762,41 @@ function quickAdd() {
               <strong>{{ group.emptyTitle }}</strong>
               <p>{{ group.emptyText }}</p>
               <button class="btn" @click="beginAdd('task', group.add)"><Plus :size="16" /> {{ group.cta }}</button>
+            </div>
+          </section>
+        </section>
+
+        <section v-else-if="section === 'capture'" class="page">
+          <div class="page-head">
+            <p class="date-line">Una riga per cosa</p>
+            <h1 class="page-title">Cattura veloce</h1>
+            <p class="page-sub">Scrivi come viene. DAYLY riconosce data, orario e priorità, poi confermi tu.</p>
+          </div>
+
+          <section class="card">
+            <textarea v-model="captureInput" rows="5" class="composer-input" placeholder="domani alle 15 dentista&#10;! chiamare Marco&#10;giovedì 9:30 presentazione"></textarea>
+            <button class="btn btn-block" style="margin-top:14px" :disabled="!captureInput.trim()" @click="runCapture">Leggi quello che ho scritto</button>
+          </section>
+
+          <section v-if="captureNotes.length" class="card">
+            <div class="card-head"><h2>Non ho capito queste righe<span class="head-sub">Riscrivile o aggiungile a mano</span></h2></div>
+            <p v-for="note in captureNotes" :key="note" class="unread-line">{{ note }}</p>
+          </section>
+
+          <section class="card">
+            <div class="card-head"><h2>Cosa riconosce<span class="head-sub">Una riga per cosa, oppure separa con «poi»</span></h2></div>
+            <div class="legend"><span class="legend-key">oggi · domani · dopodomani</span><span>la data</span></div>
+            <div class="legend"><span class="legend-key">giovedì · 24 ottobre · 24/10</span><span>il giorno preciso</span></div>
+            <div class="legend"><span class="legend-key">alle 15 · 9:30 · ore 18</span><span>l’orario, che la rende un appuntamento</span></div>
+            <div class="legend"><span class="legend-key">! all’inizio · priorità</span><span>una delle tre del giorno</span></div>
+            <div class="legend"><span class="legend-key">il nome di un progetto</span><span>la collega a quel progetto</span></div>
+            <div class="legend"><span class="legend-key">tedesco al 60%</span><span>aggiorna la percentuale, senza creare attività</span></div>
+          </section>
+
+          <section class="card">
+            <div class="card-head"><h2>Prova così</h2></div>
+            <div class="chat-hint">
+              <button v-for="example in captureExamples" :key="example" class="chat-example" @click="captureInput = captureInput.trim() ? `${captureInput.trim()}\n${example}` : example">{{ example }}</button>
             </div>
           </section>
         </section>
@@ -633,11 +957,15 @@ function quickAdd() {
               <button class="btn btn-soft" @click="copyPairingCode">Copia il codice</button>
             </div>
 
+            <button class="btn btn-soft btn-block" style="margin-top:14px" :disabled="proposalsBusy || !cloudSettings()" @click="fetchProposals(true)">
+              <RefreshCw :size="16" /> {{ proposalsBusy ? 'Controllo…' : 'Controlla se ci sono proposte' }}
+            </button>
+
             <ol class="steps">
               <li>In Claude apri <strong>Impostazioni → Connettori → Aggiungi connettore personalizzato</strong>.</li>
               <li>Inserisci <code>https://dayly-delta.vercel.app/api/mcp</code> e avvia la connessione.</li>
               <li>Quando si apre la pagina DAYLY, incolla il codice temporaneo e autorizza.</li>
-              <li>Chiedi a Claude di consultare DAYLY. Le modifiche richiedono una tua conferma.</li>
+              <li>Chiedi a Claude di organizzarti la settimana. Le sue proposte arrivano qui in DAYLY, dove le accetti o le rifiuti una per una.</li>
             </ol>
 
             <div v-if="!cloudSettings()">
@@ -697,6 +1025,11 @@ function quickAdd() {
           </div>
           <button class="ghost-round" aria-label="Chiudi" @click="showSheet = false"><X :size="18" /></button>
         </div>
+        <button class="sheet-link" @click="switchTo('capture')">
+          <span class="row-icon tone-violet"><PenLine :size="18" /></span>
+          <div><strong>Cattura veloce</strong><small>Scrivi più cose insieme, le metto in agenda</small></div>
+          <ChevronRight class="go" :size="18" />
+        </button>
         <button class="sheet-link" @click="switchTo('ideas')">
           <span class="row-icon tone-mint"><Lightbulb :size="18" /></span>
           <div><strong>Idee</strong><small>Appunti veloci da riprendere con calma</small></div>
@@ -717,6 +1050,35 @@ function quickAdd() {
           <div><strong>Impostazioni e backup</strong><small>{{ cloudSettings() ? 'Locale · copia cifrata online' : 'Dati salvati solo su questo iPhone' }}</small></div>
           <ChevronRight class="go" :size="18" />
         </button>
+      </section>
+    </div>
+
+    <!-- anteprima: cattura veloce e proposte di Claude -->
+    <div v-if="pending.length" class="backdrop" @click.self="dismissPending">
+      <section class="sheet">
+        <div class="sheet-grip"></div>
+        <div class="sheet-head">
+          <div>
+            <h2>{{ pendingSource.length ? 'Claude propone' : 'Sto per inserire' }}</h2>
+            <p>Togli quello che non ti serve, poi conferma.</p>
+          </div>
+          <button class="ghost-round" aria-label="Chiudi" @click="dismissPending"><X :size="18" /></button>
+        </div>
+        <div class="list">
+          <div v-for="change in pending" :key="change.id" class="row">
+            <span class="row-icon" :class="`tone-${pendingTone(change)}`"><component :is="pendingIcon(change)" :size="18" /></span>
+            <span class="row-body">
+              <span class="type-label" :class="`label-${pendingTone(change)}`">{{ pendingKind(change) }}</span>
+              <span class="row-title">{{ pendingTitle(change) }}</span>
+              <span class="row-meta">{{ pendingMeta(change) }}</span>
+            </span>
+            <button class="ghost-round" :aria-label="`Togli ${pendingTitle(change)}`" @click="discardPending(change.id)"><X :size="16" /></button>
+          </div>
+        </div>
+        <div class="sheet-actions">
+          <button class="btn btn-soft" @click="dismissPending">{{ pendingSource.length ? 'Rifiuta' : 'Annulla' }}</button>
+          <button class="btn" @click="applyPending"><Check :size="16" /> Conferma {{ pending.length }}</button>
+        </div>
       </section>
     </div>
 

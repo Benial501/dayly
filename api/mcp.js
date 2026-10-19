@@ -2,6 +2,7 @@ import { createDecipheriv, createCipheriv, randomBytes } from 'node:crypto'
 import { accountHash, bearer, credentialHash, verifyToken } from '../lib/security.js'
 import { readPrivateJson, writePrivateJson } from '../lib/blob-store.js'
 
+const WEEK = 7 * 24 * 60 * 60 * 1000
 const text = (value) => ({ content: [{ type: 'text', text: typeof value === 'string' ? value : JSON.stringify(value, null, 2) }] })
 const fail = (response, status, body) => { response.statusCode = status; response.setHeader('Content-Type', 'application/json'); return response.end(JSON.stringify(body)) }
 function decryptSnapshot(envelope, key) {
@@ -40,7 +41,7 @@ function success(id, result) { return { jsonrpc: '2.0', id, result } }
 
 const tools = [
   { name: 'dayly_leggi_dati', description: 'Legge attività, progetti, idee e riepiloghi salvati dall’utente in DAYLY. Usa questi dati solo per la richiesta corrente.', inputSchema: { type: 'object', properties: { periodo: { type: 'string', enum: ['oggi', 'settimana', 'tutti'], description: 'Seleziona quali attività includere.' } } } },
-  { name: 'dayly_proponi_modifiche', description: 'Prepara una lista di modifiche DAYLY da mostrare all’utente. È solo un’anteprima e non cambia i dati.', inputSchema: { type: 'object', properties: { modifiche: { type: 'array', items: { type: 'object', properties: { tipo: { type: 'string', enum: ['aggiungi_attivita','sposta_attivita','aggiorna_progresso','completa_attivita'] }, titolo: { type: 'string' }, data: { type: 'string' }, ora: { type: 'string' }, progetto: { type: 'string' }, progresso: { type: 'number' } }, required: ['tipo'] } } }, required: ['modifiche'] } },
+  { name: 'dayly_proponi_modifiche', description: 'Invia a DAYLY una lista di modifiche proposte. Non cambia i dati: l’utente le trova nell’app come schede da accettare o rifiutare una per una. Usa questo strumento quando l’utente ti chiede di organizzargli qualcosa, poi digli che le proposte lo aspettano in DAYLY.', inputSchema: { type: 'object', properties: { nota: { type: 'string', description: 'Una frase che spiega all’utente cosa hai proposto e perché.' }, modifiche: { type: 'array', items: { type: 'object', properties: { tipo: { type: 'string', enum: ['aggiungi_attivita','sposta_attivita','aggiorna_progresso','completa_attivita'] }, titolo: { type: 'string' }, data: { type: 'string' }, ora: { type: 'string' }, priorita: { type: 'boolean' }, progetto: { type: 'string' }, progresso: { type: 'number' } }, required: ['tipo'] } } }, required: ['modifiche'] } },
   { name: 'dayly_applica_modifiche', description: 'Applica in DAYLY le modifiche già mostrate all’utente solo dopo che ha scritto chiaramente che le conferma. Ripeti la frase di conferma nella motivazione; se non ha confermato, non chiamare questo strumento.', inputSchema: { type: 'object', properties: { motivazione: { type: 'string', description: 'Frase esplicita di conferma dell’utente nella conversazione corrente.' }, modifiche: { type: 'array', items: { type: 'object', properties: { tipo: { type: 'string', enum: ['aggiungi_attivita','sposta_attivita','aggiorna_progresso','completa_attivita'] }, titolo: { type: 'string' }, data: { type: 'string' }, ora: { type: 'string' }, progetto: { type: 'string' }, progresso: { type: 'number' } }, required: ['tipo'] } } }, required: ['motivazione','modifiche'] } },
 ]
 
@@ -81,7 +82,26 @@ export default async function handler(request, response) {
     }
     return response.status(200).json(success(id, text(result)))
   }
-  if (name === 'dayly_proponi_modifiche') return response.status(200).json(success(id, text({ anteprima: args.modifiche || [], stato: 'Nessun dato è stato modificato. Chiedi conferma prima di applicare.' })))
+  if (name === 'dayly_proponi_modifiche') {
+    const proposed = (Array.isArray(args.modifiche) ? args.modifiche : []).slice(0, 20)
+    if (!proposed.length) return response.status(200).json(success(id, { ...text('Serve almeno una modifica da proporre.'), isError: true }))
+    const now = Date.now()
+    const stored = (await readPrivateJson(`${user.root}/proposals.json`))?.proposte || []
+    const kept = stored.filter(item => now - Number(item.createdAt || 0) < WEEK).slice(-10)
+    const proposal = {
+      id: randomBytes(8).toString('hex'),
+      createdAt: now,
+      nota: typeof args.nota === 'string' ? args.nota.slice(0, 300) : '',
+      modifiche: proposed,
+    }
+    try { await writePrivateJson(`${user.root}/proposals.json`, { proposte: [...kept, proposal] }) }
+    catch { return response.status(200).json(success(id, { ...text('Non sono riuscito a inviare la proposta a DAYLY.'), isError: true })) }
+    return response.status(200).json(success(id, text({
+      stato: 'Proposta inviata a DAYLY. Nessun dato è stato modificato.',
+      inviate: proposed.length,
+      messaggio: 'Di’ all’utente che le proposte lo aspettano in DAYLY, dove le accetta o le rifiuta una per una. Non chiedere conferma in chat per queste.',
+    })))
+  }
   if (name === 'dayly_applica_modifiche') {
     if (typeof args.motivazione !== 'string' || args.motivazione.trim().length < 3) return response.status(200).json(success(id, { ...text('Serve una conferma esplicita dell’utente prima di procedere.'), isError: true }))
     const changes = Array.isArray(args.modifiche) ? args.modifiche.slice(0, 20) : []

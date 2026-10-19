@@ -10,13 +10,14 @@ DAYLY è un’agenda personale in italiano, pensata prima di tutto per iPhone. S
 - **Idee, riepiloghi e focus settimanale.**
 - **Offline:** le funzioni locali continuano a funzionare senza rete.
 - **Backup:** esportazione e ripristino di un file JSON.
-- **Claude:** collegamento OAuth a un MCP remoto. Claude usa il piano dell’utente nell’app Claude; DAYLY non invia chiamate a un’API AI a pagamento.
+- **Cattura veloce:** scrivi più cose insieme in italiano («domani alle 15 dentista», «! chiamare Marco», «tedesco al 60%»). DAYLY riconosce data, orario, priorità e progetti, mostra l’anteprima e inserisce solo dopo conferma. Funziona offline e non chiama nessun servizio.
+- **Claude:** collegamento OAuth a un MCP remoto. Claude usa il piano dell’utente nell’app Claude; DAYLY non invia chiamate a un’API AI a pagamento. Le modifiche che Claude propone arrivano in DAYLY come schede da accettare o rifiutare una per una.
 
 ## Tecnologie
 
 - Vue 3, Vite e Tailwind CSS 4.
 - IndexedDB tramite `idb` per l’archivio locale.
-- Vercel Functions per sincronizzazione, OAuth e server MCP.
+- Vercel Functions per sincronizzazione, OAuth, server MCP e proposte in attesa.
 - Vercel Blob **privato** per la copia remota cifrata.
 - Cifratura AES-GCM nel browser prima del trasferimento. Il server memorizza il contenuto cifrato; il connettore lo decifra solo durante una richiesta autenticata.
 
@@ -62,13 +63,13 @@ Il progetto usa `npm run build`, output `dist` e le funzioni in `api/`. La repos
 
 ## Collegare Claude
 
-1. Apri la scheda **Assistente** in DAYLY e scegli **Attiva la sincronizzazione protetta**. DAYLY crea un identificativo e una chiave casuale, salva la chiave in IndexedDB e carica una copia cifrata.
+1. Apri **Altro → Claude** in DAYLY e scegli **Attiva la sincronizzazione protetta**. DAYLY crea un identificativo e una chiave casuale, salva la chiave in IndexedDB e carica una copia cifrata.
 2. Premi **Genera codice temporaneo per Claude**. Il codice dura cinque minuti.
 3. In Claude apri **Impostazioni → Connettori → Aggiungi connettore personalizzato**, inserisci `https://dayly-delta.vercel.app/api/mcp` e avvia la connessione.
 4. Nella pagina di autorizzazione DAYLY incolla il codice temporaneo. Claude riceve permessi di lettura e scrittura; la pagina mostra i permessi prima di completare l’accesso.
-5. Chiedi a Claude di leggere o organizzare i tuoi dati. Per applicare cambiamenti, Claude deve prima mostrarti l’elenco e attendere una tua conferma esplicita nella conversazione.
+5. Chiedi a Claude di leggere o organizzare i tuoi dati. Le modifiche che propone arrivano in DAYLY come schede: le trovi su **Oggi**, con la riga di stato che segnala quante ne sono in attesa, e le accetti o le rifiuti una per una. Claude può anche applicarle dalla conversazione, ma solo dopo una tua conferma esplicita.
 
-DAYLY fornisce tre strumenti MCP: lettura dei dati, anteprima di modifiche e applicazione di modifiche dopo conferma. Se Claude modifica dati mentre DAYLY è chiusa, l’app li recupera alla successiva apertura online. Se rileva una modifica concorrente, evita di sovrascrivere la copia remota e segnala di ricaricare.
+DAYLY fornisce tre strumenti MCP: lettura dei dati, invio di proposte da confermare nell’app e applicazione diretta dopo conferma in chat. Se Claude modifica dati mentre DAYLY è chiusa, l’app li recupera alla successiva apertura online. Se rileva una modifica concorrente, evita di sovrascrivere la copia remota e segnala di ricaricare.
 
 Per revocare Claude e invalidare i token già emessi, usa **Revoca il collegamento** in DAYLY. Questa operazione rinnova la chiave; la copia cifrata resta nel private Blob e la sincronizzazione continua con la nuova chiave.
 
@@ -83,6 +84,7 @@ Questo progetto integra Claude tramite il connettore MCP, quindi non richiede un
 - **Claude:** quando chiedi di usare il connettore, i dati necessari vengono decifrati lato server e restituiti a Claude. Si applicano le impostazioni e le condizioni privacy del tuo account Claude. Non inviare dati che non vuoi condividere con Claude.
 - **Credenziali:** la chiave personale resta in IndexedDB e non viene inclusa nel backup JSON. Il codice di collegamento temporaneo è valido per cinque minuti. I token Claude sono firmati lato server e possono essere revocati ruotando la chiave personale.
 - **Repository pubblica:** codice, documentazione e logo sono pubblici; dati, chiavi e token non vanno mai salvati nel repository. `.gitignore` esclude `.env.local` e `.vercel/`.
+- **Proposte in attesa:** le modifiche che Claude propone restano sul server **in chiaro** in `users/<hash>/proposals.json` — Claude non ha la chiave personale e non può cifrarle. Vengono cancellate appena le accetti o le rifiuti nell’app, e scadono comunque dopo sette giorni.
 - **Conflitti:** la sincronizzazione usa una revisione; se Claude e DAYLY modificano lo stesso archivio in contemporanea, la nuova scrittura si ferma per non sovrascrivere dati.
 
 Il backup esportato è JSON in chiaro e non include la chiave cloud. Conservalo in un luogo privato. Tieni una copia periodica anche se hai attivato la sincronizzazione.
