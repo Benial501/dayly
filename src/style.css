@@ -41,7 +41,7 @@
 
 /* Niente zoom col doppio tocco: su iPhone ingrandiva la pagina e la
    lasciava storta. «manipulation» toglie solo quello, il pizzico resta. */
-html {
+html, body {
   touch-action: manipulation;
   -webkit-text-size-adjust: 100%;
 }
@@ -53,6 +53,10 @@ body {
   overscroll-behavior-y: none;
 }
 button, .chip, .strip-day, .row-main { -webkit-user-select: none; user-select: none; }
+/* la proprietà non si eredita: la ripeto su ciò che si tocca, altrimenti
+   il doppio tocco su un bottone o su una riga ingrandisce ancora la pagina */
+button, a, label, input, textarea, select,
+.row, .card, .sheet, .mail-card, .seg-btn { touch-action: manipulation; }
 button, input, textarea, select { font: inherit; }
 button { color: inherit; cursor: pointer; border: 0; background: none; padding: 0; }
 h1, h2, h3, p { margin: 0; }
@@ -627,7 +631,7 @@ h1, h2, h3, p { margin: 0; }
   background: #FBFBFE;
   border-radius: 16px;
   padding: 13px 14px;
-  font-size: 15px;
+  font-size: 16px;
   color: var(--ink);
 }
 .input:focus, .notes:focus { outline: none; border-color: var(--violet); background: #fff; }
@@ -1159,17 +1163,175 @@ h1, h2, h3, p { margin: 0; }
 }
 .switch:active i { transform: scale(.9); }
 
-.mail-summary {
-  display: block;
-  font-size: 15.5px;
+/* ──────────────────────────────────────────────
+   casella email · due pagine che si sfogliano
+   ────────────────────────────────────────────── */
+.mail-sheet {
+  display: flex;
+  flex-direction: column;
+  max-height: min(92dvh, 880px);
+  overflow: hidden;
+  padding: 10px 0 0;
+}
+.mail-sheet .sheet-grip { margin-bottom: 10px; }
+.mail-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 16px;
+}
+.mail-head h2 {
+  font-family: Manrope, sans-serif;
+  font-size: clamp(19px, 5.2vw, 22px);
+  font-weight: 800;
+  letter-spacing: -.7px;
+}
+.mail-head p { font-size: 13px; color: var(--muted); margin-top: 4px; line-height: 1.45; }
+
+/* le due pagine: si cambia col tocco o trascinando di lato */
+.seg {
+  display: flex;
+  gap: 4px;
+  margin: 14px 16px 0;
+  padding: 4px;
+  border-radius: 99px;
+  background: var(--bg);
+}
+.seg-btn {
+  flex: 1;
+  min-width: 0;
+  height: 38px;
+  border-radius: 99px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-size: 13.5px;
   font-weight: 600;
-  line-height: 1.38;
+  color: var(--ink-soft);
+  transition: background .18s ease, color .18s ease;
+}
+.seg-btn.on { background: var(--surface); color: var(--ink); box-shadow: var(--shadow-soft); }
+.seg-btn i {
+  font-style: normal;
+  font-size: 11.5px;
+  font-weight: 700;
+  min-width: 19px;
+  height: 19px;
+  padding: 0 5px;
+  border-radius: 99px;
+  background: var(--violet-bg);
+  color: var(--violet);
+  display: inline-grid;
+  place-items: center;
+}
+.seg-btn.on i { background: var(--violet); color: #fff; }
+
+.mail-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  padding: 14px 16px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+}
+.mail-scroll.slide-left { animation: mail-page-left .24s ease; }
+.mail-scroll.slide-right { animation: mail-page-right .24s ease; }
+@keyframes mail-page-left { from { opacity: 0; transform: translateX(22px); } }
+@keyframes mail-page-right { from { opacity: 0; transform: translateX(-22px); } }
+
+.mail-note {
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: #3B2F94;
+  background: var(--violet-bg);
+  border-radius: var(--r-inner);
+  padding: 12px 14px;
+}
+.mail-card {
+  background: #FBFBFE;
+  border: 1px solid var(--line);
+  border-radius: var(--r-inner);
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+.mail-card-top { display: flex; align-items: center; gap: 10px; }
+.mail-card-top .row-icon { width: 32px; height: 32px; border-radius: 11px; }
+.mail-chips { display: flex; flex-wrap: wrap; gap: 6px; flex: 1; min-width: 0; }
+.mail-chip {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--ink-soft);
+  background: var(--bg);
+  border-radius: 99px;
+  padding: 4px 9px;
+}
+.mail-chip.is-urgent { background: var(--peach-bg); color: var(--peach); }
+.mail-summary {
+  font-size: clamp(14.5px, 4vw, 15.5px);
+  font-weight: 600;
+  line-height: 1.42;
   letter-spacing: -.1px;
+}
+.mail-why {
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.45;
+  padding-left: 10px;
+  border-left: 2px solid var(--line);
 }
 .mail-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 14px;
-  margin-top: 8px;
+  gap: 8px;
+  margin-top: 2px;
 }
-.mail-actions .btn-ghost { text-decoration: none; }
+.mail-act {
+  flex: 1 1 calc(50% - 4px);
+  min-width: 104px;
+  height: 38px;
+  border-radius: 12px;
+  background: var(--bg);
+  color: var(--ink-soft);
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+.mail-act.is-open { background: var(--violet-bg); color: var(--violet); }
+.mail-act:active { transform: scale(.97); }
+.mail-scroll .empty { padding: 24px 10px 10px; }
+
+.mail-warn {
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--peach);
+  background: var(--peach-bg);
+  border-radius: 14px;
+  padding: 10px 12px;
+  margin: 0 16px 2px;
+}
+.mail-foot {
+  display: flex;
+  gap: 8px;
+  padding: 12px 16px calc(env(safe-area-inset-bottom) + 14px);
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+}
+.mail-foot .btn {
+  flex: 1;
+  min-width: 0;
+  height: 44px;
+  padding: 0 12px;
+  font-size: 13.5px;
+  white-space: nowrap;
+}

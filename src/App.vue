@@ -594,12 +594,18 @@ function mailDay(mail) {
   return /^\d{4}-\d{2}-\d{2}$/.test(mail.ricevuta || '') ? mail.ricevuta : keyDate(new Date(Number(mail.createdAt) || Date.now()))
 }
 
-function mailMeta(mail) {
-  const parts = []
+// le due informazioni di contorno diventano pastiglie: su iPhone una riga
+// sola di testo andava a capo male e si leggeva peggio
+function mailChips(mail) {
   const day = mailDay(mail)
-  parts.push(day === todayKey ? 'arrivata oggi' : `arrivata ${longDate(new Date(`${day}T12:00:00`))}`)
-  if (/^\d{4}-\d{2}-\d{2}$/.test(mail.scadenza || '')) parts.push(mail.scadenza === todayKey ? 'da gestire oggi' : `entro ${longDate(new Date(`${mail.scadenza}T12:00:00`))}`)
-  return parts.join(' · ')
+  const chips = [{ text: day === todayKey ? 'arrivata oggi' : `arrivata ${longDate(new Date(`${day}T12:00:00`))}`, urgent: false }]
+  if (/^\d{4}-\d{2}-\d{2}$/.test(mail.scadenza || '')) {
+    chips.push({
+      text: mail.scadenza === todayKey ? 'da gestire oggi' : `entro ${longDate(new Date(`${mail.scadenza}T12:00:00`))}`,
+      urgent: mail.scadenza <= todayKey,
+    })
+  }
+  return chips
 }
 
 const byNewest = (a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0)
@@ -705,7 +711,32 @@ function openMailbox(archive = false) {
   fetchMailbox()
 }
 
-function openArchive(open) { showArchive.value = open; confirmArchiveWipe.value = false }
+// cambiare pagina: la nuova entra dal lato da cui arriva, così si capisce
+// di essere passati all'altra metà della casella
+const mailSlide = ref('')
+function openArchive(open) {
+  if (showArchive.value !== open) mailSlide.value = open ? 'slide-left' : 'slide-right'
+  showArchive.value = open
+  confirmArchiveWipe.value = false
+}
+
+// il trascinamento di lato sfoglia le pagine, come ci si aspetta sul telefono
+let mailTouch = null
+function mailTouchStart(event) {
+  mailTouch = event.touches.length === 1 ? { x: event.touches[0].clientX, y: event.touches[0].clientY } : null
+}
+function mailTouchEnd(event) {
+  const start = mailTouch
+  mailTouch = null
+  if (!start) return
+  const touch = event.changedTouches[0]
+  const dx = touch.clientX - start.x
+  const dy = touch.clientY - start.y
+  // solo i gesti chiaramente orizzontali: altrimenti rubo lo scorrimento
+  if (Math.abs(dx) < 56 || Math.abs(dx) < Math.abs(dy) * 1.5) return
+  if (dx < 0) openArchive(true)
+  else openArchive(false)
+}
 
 // le email compaiono quando Claude le deposita: ricontrollo da solo mentre
 // DAYLY è davanti agli occhi, così non devo riaprirla per vederle
@@ -1258,50 +1289,79 @@ function openCapture() {
 
     <!-- riassunti delle email importanti segnalate da Claude -->
     <div v-if="showMailbox" class="backdrop" @click.self="showMailbox = false">
-      <section class="sheet">
+      <section class="sheet mail-sheet">
         <div class="sheet-grip"></div>
-        <div class="sheet-head">
+        <div class="mail-head">
           <div>
             <h2>{{ showArchive ? 'Archivio email' : 'Email di oggi' }}</h2>
             <p>{{ showArchive ? 'Le email già passate. Se elimini l’archivio non le rivedi più da qui.' : 'Cosa dicono le email che Claude ti segnala. A fine giornata finiscono in archivio da sole.' }}</p>
           </div>
           <button class="ghost-round" aria-label="Chiudi" @click="showMailbox = false"><X :size="18" /></button>
         </div>
-        <div v-if="!showArchive && mailLive.length" class="list">
-          <div v-for="mail in mailLive" :key="mail.id" class="row">
-            <span class="row-icon tone-sky"><Mail :size="18" /></span>
-            <span class="row-body">
-              <span class="mail-summary">{{ mail.riassunto || mail.motivo }}</span>
-              <span v-if="mail.riassunto && mail.motivo" class="row-meta">{{ mail.motivo }}</span>
-              <span class="row-meta">{{ mailMeta(mail) }}</span>
-              <span class="mail-actions">
-                <a v-if="mail.link" class="btn-ghost" :href="mail.link" target="_blank" rel="noopener noreferrer"><ExternalLink :size="14" /> Vedi email</a>
-                <button class="btn-ghost" @click="mailToTask(mail)"><ListTodo :size="14" /> Fanne un’attività</button>
-                <button class="btn-ghost" @click="archiveMail(mail.id)"><Archive :size="14" /> Archivia</button>
-              </span>
-            </span>
-          </div>
+
+        <!-- due pagine: si cambia toccando o trascinando di lato -->
+        <div class="seg" role="tablist">
+          <button class="seg-btn" :class="{ on: !showArchive }" role="tab" :aria-selected="!showArchive" @click="openArchive(false)">
+            Oggi<i v-if="mailCount">{{ mailCount }}</i>
+          </button>
+          <button class="seg-btn" :class="{ on: showArchive }" role="tab" :aria-selected="showArchive" @click="openArchive(true)">
+            Archivio<i v-if="archiveCount">{{ archiveCount }}</i>
+          </button>
         </div>
-        <div v-else-if="!showArchive" class="empty"><strong>Niente di nuovo oggi</strong><p>Quando chiedi a Claude di guardare la posta, qui trovi il riassunto di cosa dicono le email.</p></div>
-        <div v-else-if="mailArchived.length" class="list">
-          <div v-for="mail in mailArchived" :key="mail.id" class="row">
-            <span class="row-icon tone-sky"><Archive :size="18" /></span>
-            <span class="row-body">
-              <span class="row-title">{{ mail.riassunto || mail.motivo }}</span>
-              <span class="row-meta">{{ mailMeta(mail) }}</span>
-              <span class="mail-actions">
-                <a v-if="mail.link" class="btn-ghost" :href="mail.link" target="_blank" rel="noopener noreferrer"><ExternalLink :size="14" /> Vedi email</a>
-              </span>
-            </span>
-          </div>
+
+        <div
+          class="mail-scroll"
+          :class="mailSlide"
+          :key="showArchive ? 'archivio' : 'oggi'"
+          @touchstart.passive="mailTouchStart"
+          @touchend.passive="mailTouchEnd"
+        >
+          <template v-if="!showArchive">
+            <p v-if="mailNote" class="mail-note">{{ mailNote }}</p>
+            <article v-for="mail in mailLive" :key="mail.id" class="mail-card">
+              <div class="mail-card-top">
+                <span class="row-icon tone-sky"><Mail :size="16" /></span>
+                <span class="mail-chips">
+                  <span v-for="chip in mailChips(mail)" :key="chip.text" class="mail-chip" :class="{ 'is-urgent': chip.urgent }">{{ chip.text }}</span>
+                </span>
+              </div>
+              <p class="mail-summary">{{ mail.riassunto || mail.motivo }}</p>
+              <p v-if="mail.riassunto && mail.motivo" class="mail-why">{{ mail.motivo }}</p>
+              <div class="mail-actions">
+                <a v-if="mail.link" class="mail-act is-open" :href="mail.link" target="_blank" rel="noopener noreferrer"><ExternalLink :size="15" /> Vedi email</a>
+                <button class="mail-act" @click="mailToTask(mail)"><ListTodo :size="15" /> Fanne un’attività</button>
+                <button class="mail-act" @click="archiveMail(mail.id)"><Archive :size="15" /> Archivia</button>
+              </div>
+            </article>
+            <div v-if="!mailLive.length" class="empty">
+              <strong>Niente di nuovo oggi</strong>
+              <p>Quando chiedi a Claude di guardare la posta, qui trovi il riassunto di cosa dicono le email.</p>
+            </div>
+          </template>
+          <template v-else>
+            <article v-for="mail in mailArchived" :key="mail.id" class="mail-card">
+              <div class="mail-card-top">
+                <span class="row-icon tone-sky"><Archive :size="16" /></span>
+                <span class="mail-chips">
+                  <span v-for="chip in mailChips(mail)" :key="chip.text" class="mail-chip">{{ chip.text }}</span>
+                </span>
+              </div>
+              <p class="mail-summary">{{ mail.riassunto || mail.motivo }}</p>
+              <div v-if="mail.link" class="mail-actions">
+                <a class="mail-act is-open" :href="mail.link" target="_blank" rel="noopener noreferrer"><ExternalLink :size="15" /> Vedi email</a>
+              </div>
+            </article>
+            <div v-if="!mailArchived.length" class="empty">
+              <strong>Archivio vuoto</strong>
+              <p>Qui finiscono i riassunti delle giornate passate e quelli che archivi tu.</p>
+            </div>
+          </template>
         </div>
-        <div v-else class="empty"><strong>Archivio vuoto</strong><p>Qui finiscono i riassunti delle giornate passate e quelli che archivi tu.</p></div>
-        <p v-if="confirmArchiveWipe" class="project-note">Elimino {{ archiveCount }} {{ archiveCount === 1 ? 'email archiviata' : 'email archiviate' }}: da DAYLY non le rivedi più. Tocca di nuovo per confermare.</p>
-        <div class="sheet-actions">
-          <button v-if="!showArchive" class="btn btn-soft" :disabled="!mailLive.length" @click="archiveAllMails">Archivia tutte</button>
-          <button v-else class="btn btn-soft" :disabled="!mailArchived.length" @click="deleteArchive"><Trash2 :size="16" /> {{ confirmArchiveWipe ? 'Confermo' : 'Elimina archivio' }}</button>
-          <button v-if="!showArchive" class="btn btn-soft" @click="openArchive(true)"><Archive :size="16" /> Archivio{{ archiveCount ? ` (${archiveCount})` : '' }}</button>
-          <button v-else class="btn btn-soft" @click="openArchive(false)"><ArrowLeft :size="16" /> Email di oggi</button>
+
+        <p v-if="confirmArchiveWipe" class="mail-warn">Elimino {{ archiveCount }} {{ archiveCount === 1 ? 'email archiviata' : 'email archiviate' }}: da DAYLY non le rivedi più. Tocca di nuovo per confermare.</p>
+        <div class="mail-foot">
+          <button v-if="!showArchive" class="btn btn-soft" :disabled="!mailLive.length" @click="archiveAllMails"><Archive :size="16" /> Archivia tutte</button>
+          <button v-else class="btn btn-soft" :disabled="!mailArchived.length" @click="deleteArchive"><Trash2 :size="16" /> {{ confirmArchiveWipe ? 'Confermo' : 'Elimina' }}</button>
           <button class="btn" @click="showMailbox = false"><Check :size="16" /> Chiudi</button>
         </div>
       </section>
