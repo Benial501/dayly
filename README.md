@@ -1,123 +1,130 @@
 # DAYLY
 
-DAYLY è uno spazio personale in italiano per organizzare la giornata, i progetti, gli obiettivi e le idee. È una PWA mobile-first pensata per essere aggiunta alla schermata Home di iPhone. Non richiede account e non usa Supabase: le funzionalità locali sono disponibili anche offline.
+DAYLY è un’agenda personale in italiano, pensata prima di tutto per iPhone. Si installa da Safari come PWA e conserva i dati di lavoro in IndexedDB. Se attivi il collegamento Claude, sincronizza una copia cifrata su Vercel Blob e permette a Claude di leggere e aggiornare i dati tramite un connettore MCP remoto.
 
-## Funzioni
+## Cosa trovi nell’app
 
-- **Oggi:** tre priorità, appuntamenti con orario, attività flessibili, progresso giornaliero e focus della settimana.
-- **Calendario:** vista settimanale con impegni fissi e attività senza orario; spostamento fra settimane e completamento con un tocco.
-- **Progetti e obiettivi:** progresso percentuale manuale, aggiornabile con il cursore.
-- **Idee:** spazio rapido per appunti da riprendere in seguito.
-- **Riepiloghi:** riflessione serale e intenzione settimanale salvate sul dispositivo.
-- **Backup:** esportazione e ripristino dell’intero archivio in JSON.
-- **Assistente:** legge i dati locali inviati con il messaggio, suggerisce organizzazioni e propone modifiche. Le modifiche si applicano solo dopo la conferma esplicita.
-- **Offline:** interfaccia installabile e cache dell’app tramite service worker; agenda, progetti, idee e riepiloghi non richiedono rete.
+- **Oggi:** tre priorità, appuntamenti, attività senza orario e avanzamento della giornata.
+- **Calendario:** settimana flessibile, impegni fissi e attività libere.
+- **Progetti e obiettivi:** percentuale di completamento aggiornata manualmente.
+- **Idee, riepiloghi e focus settimanale.**
+- **Offline:** le funzioni locali continuano a funzionare senza rete.
+- **Backup:** esportazione e ripristino di un file JSON.
+- **Claude:** collegamento OAuth a un MCP remoto. Claude usa il piano dell’utente nell’app Claude; DAYLY non invia chiamate a un’API AI a pagamento.
 
-## Stack e architettura
+## Tecnologie
 
-- Vue 3 e Vite per l’interfaccia.
-- Tailwind CSS 4 è incluso nella configurazione; lo stile DAYLY è definito in `src/style.css`.
-- IndexedDB tramite `idb` per attività, progetti, idee, riepiloghi e impostazioni. Nessun dato applicativo è scritto su un database remoto.
-- Service worker in `public/sw.js` e manifest PWA in `public/manifest.webmanifest`.
-- Funzione serverless Vercel in `api/assistant.js`. Il browser invia il messaggio e una copia dei dati selezionati; il server chiama l’API OpenAI. La chiave non viene inclusa nel bundle client.
+- Vue 3, Vite e Tailwind CSS 4.
+- IndexedDB tramite `idb` per l’archivio locale.
+- Vercel Functions per sincronizzazione, OAuth e server MCP.
+- Vercel Blob **privato** per la copia remota cifrata.
+- Cifratura AES-GCM nel browser prima del trasferimento. Il server memorizza il contenuto cifrato; il connettore lo decifra solo durante una richiesta autenticata.
 
 ```text
-src/App.vue ── src/db.js ── IndexedDB del browser
-     │
-     └── POST /api/assistant ── Vercel Function ── OpenAI API
+DAYLY su iPhone
+  ├─ IndexedDB ─────────────── uso locale/offline
+  ├─ AES-GCM ─ Vercel Function ─ private Vercel Blob
+  └─ OAuth ─ Claude ─ MCP /api/mcp ─ dati cifrati decifrati per la richiesta
 ```
 
-La funzione AI non conserva conversazioni né dati applicativi. La richiesta viene inoltrata a OpenAI e soggetta alle condizioni di trattamento e conservazione del fornitore. Non inviare informazioni particolarmente sensibili. Le proposte AI sono dati non attendibili: l’app riconosce un insieme limitato di azioni, le mostra e richiede conferma prima di applicarle.
+Non si usa Supabase. DAYLY non ha un login con email/password: genera un codice segreto personale sul dispositivo. Chiunque ottenga quel codice può accedere alla copia remota e collegare Claude; proteggilo come una password.
 
-## Requisiti
+## Avvio e sviluppo
 
-- Node.js 20 o superiore (verificato con Node.js 24).
-- npm.
-- Account Vercel per pubblicare.
-- Facoltativo: account OpenAI e API key per attivare la chat. La chiave API non è inclusa nel repository.
-
-## Avvio in locale
+Requisiti: Node.js 20+ e npm.
 
 ```bash
 npm install
 npm run dev
 ```
 
-Apri l’indirizzo locale stampato da Vite. Le funzioni locali, il salvataggio e i backup sono operativi da subito. Vite non esegue la funzione serverless `/api/assistant`: per provare la chat in locale usa `vercel dev` dopo aver configurato le variabili ambiente.
+La modalità Vite locale copre interfaccia, IndexedDB, funzioni offline e backup. Le funzioni Vercel e il collegamento Claude richiedono un ambiente Vercel configurato.
+
+Per eseguire anche le funzioni in locale, collega il progetto e recupera le variabili con gli strumenti Vercel. Non incollare token nel sorgente o in variabili `VITE_*`.
 
 ```bash
-cp .env.example .env.local
-# Inserisci la chiave solo in .env.local, mai nel codice o in una variabile VITE_*
+npx vercel link
+npx vercel env pull .env.local
 npx vercel dev
 ```
 
-L’API restituisce un messaggio esplicito quando `OPENAI_API_KEY` manca.
+`BLOB_READ_WRITE_TOKEN` è fornito dal Blob store collegato. `DAYLY_AUTH_SECRET` è un segreto server-side necessario per firmare i codici OAuth. Non condividerlo e non committare `.env.local`.
 
-## Build e deployment Vercel
-
-La configurazione usa `npm run build` e la cartella `dist`; le funzioni sotto `api/` sono distribuite come Vercel Functions.
+## Build e pubblicazione
 
 ```bash
 npm run build
-npx vercel link
 npx vercel deploy
 npx vercel deploy --prod
 ```
 
-Per collegare GitHub in Vercel: importa la repository, seleziona Vite, imposta `npm run build` come build command e `dist` come output directory. I push al branch di produzione pubblicheranno gli aggiornamenti.
+Il progetto usa `npm run build`, output `dist` e le funzioni in `api/`. La repository GitHub è collegata a Vercel: i push al branch di produzione avviano il deployment automatico. L’app si può aggiungere alla schermata Home aprendo l’URL in Safari e scegliendo **Condividi → Aggiungi alla schermata Home**.
 
-## Attivare l’assistente AI
+## Collegare Claude
 
-1. Crea una chiave API nel tuo account OpenAI.
-2. In Vercel apri il progetto DAYLY e aggiungi `OPENAI_API_KEY` come variabile ambiente per gli ambienti desiderati. Aggiungi `OPENAI_MODEL` facoltativamente; il valore predefinito è `gpt-4o-mini`.
-3. Ridistribuisci il progetto per applicare la variabile.
+1. Apri la scheda **Assistente** in DAYLY e scegli **Attiva la sincronizzazione protetta**. DAYLY crea un identificativo e una chiave casuale, salva la chiave in IndexedDB e carica una copia cifrata.
+2. Premi **Genera codice temporaneo per Claude**. Il codice dura cinque minuti.
+3. In Claude apri **Impostazioni → Connettori → Aggiungi connettore personalizzato**, inserisci `https://dayly-delta.vercel.app/api/mcp` e avvia la connessione.
+4. Nella pagina di autorizzazione DAYLY incolla il codice temporaneo. Claude riceve permessi di lettura e scrittura; la pagina mostra i permessi prima di completare l’accesso.
+5. Chiedi a Claude di leggere o organizzare i tuoi dati. Per applicare cambiamenti, Claude deve prima mostrarti l’elenco e attendere una tua conferma esplicita nella conversazione.
 
-Non committare `.env.local`, chiavi o file Vercel locali. `.gitignore` esclude i file ambiente e `.vercel/`. La chiave resta lato server: non usare il prefisso `VITE_`.
+DAYLY fornisce tre strumenti MCP: lettura dei dati, anteprima di modifiche e applicazione di modifiche dopo conferma. Se Claude modifica dati mentre DAYLY è chiusa, l’app li recupera alla successiva apertura online. Se rileva una modifica concorrente, evita di sovrascrivere la copia remota e segnala di ricaricare.
 
-### Costi AI
+Per revocare Claude e invalidare i token già emessi, usa **Revoca il collegamento** in DAYLY. Questa operazione rinnova la chiave; la copia cifrata resta nel private Blob e la sincronizzazione continua con la nuova chiave.
 
-DAYLY non addebita un costo AI proprio. L’uso dell’API è fatturato dal fornitore in base al modello, ai token elaborati e alle tariffe in vigore nel tuo account; può quindi comportare costi variabili. Imposta budget o limiti di spesa nel pannello del fornitore e controlla i prezzi correnti prima di attivare la chiave. Senza chiave, tutte le altre funzioni restano utilizzabili gratuitamente (salvo costi del piano hosting eventualmente scelto).
+### ChatGPT e Claude: abbonamento e API
+
+Questo progetto integra Claude tramite il connettore MCP, quindi non richiede una chiave Anthropic API. L’uso rientra nelle condizioni e nei limiti del piano Claude dell’utente. Un abbonamento Claude.ai, da solo, non comprende le chiamate alla API Console. OpenAI ha iniziato a consentire in alcune app partner l’uso del piano ChatGPT, ma l’integrazione è disponibile solo per partner ammessi; DAYLY al momento non implementa né dichiara di avere tale approvazione. Perciò l’assistente AI attuale è Claude via connettore.
 
 ## Dati, privacy e sicurezza
 
-- I dati personali restano in IndexedDB sul browser del dispositivo, senza sincronizzazione automatica fra iPhone e computer.
-- L’assistente invia a OpenAI il testo del messaggio e le attività, i progetti, le idee e i riepiloghi per generare un suggerimento contestuale. L’app mostra questa informazione accanto alla chat.
-- La chiave API è letta esclusivamente dalla funzione Vercel. La funzione limita dimensione del messaggio e quantità di record e applica un limite di richieste in memoria per indirizzo IP. Il limite in memoria è opportunistico e non sostituisce un servizio di rate limiting condiviso.
-- Non c’è login, coerentemente con l’uso personale e senza account richiesto. Chi conosce l’URL può aprire l’interfaccia; ogni browser conserva però il proprio archivio locale. Se si configura una chiave AI su un deployment pubblico, il solo controllo dell’origine e il limite in memoria non costituiscono un’autenticazione forte: per un deployment privato con AI attiva, abilita la protezione del deployment Vercel o aggiungi un meccanismo di accesso prima di condividere l’URL.
-- Il backup JSON contiene tutti i dati dell’app in chiaro. Conservalo in uno spazio privato.
+- **Offline:** l’app legge e modifica IndexedDB sul dispositivo. Senza collegamento Claude non invia i dati a un server.
+- **Sincronizzazione:** se la attivi, DAYLY cifra lo snapshot nel browser con AES-GCM prima di inviarlo a una funzione Vercel. La copia viene conservata in uno storage Blob privato nella regione UE `fra1`.
+- **Claude:** quando chiedi di usare il connettore, i dati necessari vengono decifrati lato server e restituiti a Claude. Si applicano le impostazioni e le condizioni privacy del tuo account Claude. Non inviare dati che non vuoi condividere con Claude.
+- **Credenziali:** la chiave personale resta in IndexedDB e non viene inclusa nel backup JSON. Il codice di collegamento temporaneo è valido per cinque minuti. I token Claude sono firmati lato server e possono essere revocati ruotando la chiave personale.
+- **Repository pubblica:** codice, documentazione e logo sono pubblici; dati, chiavi e token non vanno mai salvati nel repository. `.gitignore` esclude `.env.local` e `.vercel/`.
+- **Conflitti:** la sincronizzazione usa una revisione; se Claude e DAYLY modificano lo stesso archivio in contemporanea, la nuova scrittura si ferma per non sovrascrivere dati.
 
-### Limiti IndexedDB su iOS
+Il backup esportato è JSON in chiaro e non include la chiave cloud. Conservalo in un luogo privato. Tieni una copia periodica anche se hai attivato la sincronizzazione.
 
-IndexedDB è locale al browser e può essere rimosso da iOS quando elimini i dati del sito o l’app, e in alcune condizioni di gestione dello spazio. La persistenza non è una garanzia di backup. Esporta periodicamente un JSON e salvalo in File/iCloud Drive. Aggiungendo DAYLY alla schermata Home usa l’esperienza PWA; i dati del browser e quelli della web app possono dipendere dalle regole di conservazione di iOS. Non è attiva alcuna sincronizzazione automatica.
+## Costi
 
-## Backup e ripristino
+- **Claude:** nessun costo API Anthropic separato per il connettore MCP. L’uso è soggetto ai limiti e alle condizioni del piano Claude.
+- **Vercel Blob:** il piano Hobby include attualmente 1 GB di spazio, 10.000 operazioni semplici, 2.000 avanzate e 10 GB di trasferimento Blob al mese; sul piano Hobby si applicano limiti di utilizzo. Il piano Pro applica le tariffe indicate da Vercel oltre le quote incluse. Le tariffe possono cambiare; controlla il pannello e la [pagina prezzi Vercel](https://vercel.com/pricing).
+- **Vercel Functions:** rientrano nelle quote del piano e possono generare costi secondo il piano e il volume d’uso.
 
-Apri **Impostazioni e backup** dalla barra laterale (su mobile, apri il menu) per esportare o ripristinare un file JSON. L’esportazione comprende attività, progetti, idee, riepiloghi e impostazioni. Il ripristino sostituisce l’archivio esistente: esporta prima i dati attuali se vuoi conservarli. Il file non è cifrato.
+Per una sola persona, con uno snapshot piccolo e un uso contenuto, i limiti inclusi possono essere sufficienti; non è una garanzia di costo zero. Configura un limite di spesa quando il tuo piano lo consente.
 
-## Installare su iPhone
+## Backup e limiti iOS
 
-1. Pubblica DAYLY su un indirizzo HTTPS.
-2. Apri l’URL in Safari su iPhone.
-3. Tocca **Condividi → Aggiungi alla schermata Home**.
-4. Apri DAYLY dalla schermata Home. Dopo il primo caricamento online, l’interfaccia e i dati locali sono disponibili offline.
+Apri **Impostazioni e backup** per esportare o importare l’archivio JSON. L’importazione sostituisce i dati locali, preservando il collegamento cloud attivo.
 
-## Struttura principale
+IndexedDB rimane associato al browser/app sul dispositivo. iOS può rimuovere dati del sito o dell’app se vengono cancellati i dati di navigazione o in condizioni di spazio; non è un backup garantito. La copia Blob è opzionale e richiede internet. Per trasferire il collegamento su un altro iPhone serve il segreto personale, che non è incluso nell’esportazione JSON: conserva una copia sicura separata.
+
+## Struttura del progetto
 
 ```text
-api/assistant.js              Endpoint AI server-side
-public/manifest.webmanifest   Manifest PWA
-public/sw.js                  Cache offline dell’application shell
-src/App.vue                   Interfaccia e flussi DAYLY
-src/db.js                     Accesso a IndexedDB
-src/main.js                   Avvio Vue e registrazione service worker
-src/style.css                 Design responsive
-vercel.json                   Build e output Vercel
+api/_lib/blob-store.js       Lettura/scrittura private Blob
+api/_lib/security.js         Hash credenziali e token firmati
+api/oauth/[...path].js       OAuth 2.1 per il connettore Claude
+api/pair.js                  Codice di collegamento temporaneo DAYLY
+api/sync.js                  Snapshot cifrati, revisione e revoca
+api/mcp.js                   Strumenti MCP DAYLY
+public/logo.jpg              Logo fornito per DAYLY
+assets-src/dayly-logo.jpg.b64 Sorgente del logo per la build su Vercel
+public/manifest.webmanifest  Manifest PWA
+public/sw.js                 Cache offline dell’application shell
+src/App.vue                  Interfaccia e flussi utente
+src/db.js                    Accesso a IndexedDB
+src/main.js                  Avvio Vue e service worker
+src/style.css                Palette e layout responsive
+vercel.json                  Build, rewrites OAuth e asset
 ```
 
-## Note operative
+## Limiti e note operative
 
-- Non c’è sincronizzazione cloud, account o database remoto.
-- Le tre priorità sono rappresentate da un massimo di tre elementi in evidenza nell’elenco di oggi; le altre attività restano in agenda.
-- Il calendario è una vista settimanale flessibile; lo spostamento di una settimana non cambia le date delle attività.
-- I progressi di progetto si aggiornano manualmente dall’utente. L’assistente può proporre un valore, mai applicarlo senza conferma.
-- Il backend dell’assistente usa OpenAI Chat Completions in formato JSON; eventuali modifiche del provider o del modello si gestiscono nel codice server e nelle variabili ambiente.
+- Il connettore richiede rete; il resto dell’app locale funziona offline.
+- DAYLY è progettata per uso personale. La chiave generata è una credenziale al portatore: chi la copia ottiene accesso allo snapshot. Non condividerla e proteggi il dispositivo.
+- La revoca invalida Claude ma mantiene la copia cloud cifrata per poter continuare la sincronizzazione.
+- Gli strumenti di scrittura sono limitati ad aggiunta/spostamento attività, avanzamento progetto e completamento attività. L’utente deve chiedere una modifica e confermarla nella chat Claude.
+- Il repository è richiesto pubblico; la pubblicazione della visibilità GitHub deve essere confermata dal proprietario al momento del cambio, perché renderà accessibili a chiunque file, cronologia e logo.
