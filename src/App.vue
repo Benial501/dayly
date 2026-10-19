@@ -16,12 +16,11 @@ const form = ref({})
 const toast = ref('')
 const showMobileNav = ref(false)
 const calendarOffset = ref(0)
-const assistantText = ref('')
-const assistantBusy = ref(false)
-const assistantMessages = ref([])
-const proposal = ref(null)
 const importInput = ref(null)
 const syncLabel = ref('Salvato su questo iPhone')
+const pairingCode = ref('')
+const cloudBusy = ref(false)
+const recoveryInput = ref('')
 
 const today = new Date()
 const todayKey = keyDate(today)
@@ -45,14 +44,141 @@ const lastReview = computed(() => state.value.reviews.find(item => item.period =
 const weekTasks = computed(() => state.value.tasks.filter(task => weekDays.value.some(day => keyDate(day) === task.date)))
 const projectProgress = computed(() => state.value.projects.length ? Math.round(state.value.projects.reduce((sum, p) => sum + Number(p.progress || 0), 0) / state.value.projects.length) : 0)
 
-onMounted(async () => { state.value = await readAll(); loading.value = false })
+onMounted(async () => { await loadInitialState(); loading.value = false })
 
 function keyDate(date) { return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}` }
 function newId() { return crypto.randomUUID() }
+function cloudSettings() { return state.value.settings.find(item => item.id === 'cloud-account') || null }
+function bytesToBase64Url(bytes) { let binary = ''; for (const byte of bytes) binary += String.fromCharCode(byte); return btoa(binary).replaceAll('+','-').replaceAll('/','_').replaceAll('=','') }
+function base64UrlToBytes(value) { const padded = value.replaceAll('-','+').replaceAll('_','/') + '='.repeat((4 - value.length % 4) % 4); return Uint8Array.from(atob(padded), char => char.charCodeAt(0)) }
+async function encryptSnapshot(data, keyText) {
+  const key = await crypto.subtle.importKey('raw', base64UrlToBytes(keyText), 'AES-GCM', false, ['encrypt'])
+  const iv = crypto.getRandomValues(new Uint8Array(12))
+  const encrypted = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(JSON.stringify(data)))
+  return { version: 1, iv: bytesToBase64Url(iv), data: bytesToBase64Url(new Uint8Array(encrypted)) }
+}
+async function decryptSnapshot(snapshot, keyText) {
+  const key = await crypto.subtle.importKey('raw', base64UrlToBytes(keyText), 'AES-GCM', false, ['decrypt'])
+  const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: base64UrlToBytes(snapshot.iv) }, key, base64UrlToBytes(snapshot.data))
+  return JSON.parse(new TextDecoder().decode(decrypted))
+}
+async function cloudRequest(method, account, body = null) {
+  const url = method === 'GET' ? `/api/sync?accountId=${encodeURIComponent(account.accountId)}` : '/api/sync'
+  return fetch(url, { method, headers: { Authorization: `Bearer ${account.credential}`, ...(body ? { 'Content-Type': 'application/json' } : {}) }, ...(body ? { body: JSON.stringify({ accountId: account.accountId, ...body }) } : {}) })
+}
+async function hydrateCloud(account) {
+  const response = await cloudRequest('GET', account)
+  if (!response.ok) return false
+  const remote = await response.json()
+  if (!remote.snapshot) return true
+  const data = await decryptSnapshot(remote.snapshot, account.credential)
+  await replaceAll(data)
+  await put('settings', { ...account, revision: remote.revision, dirty: false, updatedAt: Date.now() })
+  state.value = await readAll()
+  syncLabel.value = 'Sincronizzato con Claude'
+  return true
+}
+async function loadInitialState() {
+  state.value = await readAll()
+  const account = cloudSettings()
+  if (account && navigator.onLine) {
+    try { if (account.dirty) await syncLocal(true); else await hydrateCloud(account) } catch { syncLabel.value = 'Dati locali · sincronizzazione da verificare' }
+  }
+}
+async function syncLocal(showError = false) {
+  const account = cloudSettings()
+  if (!account || !navigator.onLine) return
+  try {
+    let remoteRevision = null
+    const remoteResponse = await cloudRequest('GET', account)
+    if (remoteResponse.ok) remoteRevision = (await remoteResponse.json()).revision || null
+    else if (remoteResponse.status !== 401) throw new Error('Il cloud DAYLY non risponde.')
+    if (remoteRevision !== (account.revision || null)) {
+      if (account.revision || remoteRevision) { syncLabel.value = 'Dati online aggiornati · ricarica DAYLY'; if (showError) ping('Claude ha aggiornato i dati online. Ricarica DAYLY prima di modificarli.'); return }
+    }
+    const dataToSync = { ...state.value, settings: state.value.settings.map(item => item.id === 'cloud-account' ? { ...item, dirty: false } : item) }
+    const snapshot = await encryptSnapshot(dataToSync, account.credential)
+    const upload = await cloudRequest('PUT', account, { snapshot, revision: remoteRevision })
+    const result = await upload.json()
+    if (!upload.ok) throw new Error(result.error || 'Non riesco a sincronizzare i dati.')
+    const updated = { ...account, revision: result.revision, dirty: false, updatedAt: Date.now() }
+    await put('settings', updated)
+    state.value.settings = state.value.settings.filter(item => item.id !== updated.id).concat(updated)
+    syncLabel.value = 'Sincronizzato con Claude'
+  } catch (error) { syncLabel.value = 'Solo su questo iPhone'; if (showError) ping(error.message || 'Sincronizzazione non riuscita') }
+}
+async function refreshAndSync() {
+  state.value = await readAll()
+  const account = cloudSettings()
+  if (account) { await put('settings', { ...account, dirty: true }); state.value = await readAll(); await syncLocal(true) }
+}
+async function connectClaude() {
+  if (cloudBusy.value) return
+  cloudBusy.value = true
+  try {
+    let account = cloudSettings()
+    if (!account) {
+      const credential = bytesToBase64Url(crypto.getRandomValues(new Uint8Array(32)))
+      account = { id: 'cloud-account', accountId: crypto.randomUUID(), credential, revision: null, createdAt: Date.now() }
+      await put('settings', account)
+      state.value = await readAll()
+    }
+    await syncLocal(true)
+    const response = await fetch('/api/pair', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${account.credential}` }, body: JSON.stringify({ accountId: account.accountId }) })
+    const result = await response.json()
+    if (!response.ok) throw new Error(result.error || 'Non riesco a preparare il collegamento.')
+    pairingCode.value = result.code
+    ping('Codice Claude pronto · valido per 5 minuti')
+  } catch (error) { ping(error.message || 'Collegamento non disponibile') }
+  finally { cloudBusy.value = false }
+}
+async function copyPairingCode() { await navigator.clipboard?.writeText(pairingCode.value); ping('Codice copiato') }
+async function copyRecoveryCode() {
+  const account = cloudSettings()
+  if (!account) return
+  await navigator.clipboard?.writeText(`${account.accountId}.${account.credential}`)
+  ping('Codice di recupero copiato · conservalo in un luogo privato')
+}
+async function restoreCloudConnection() {
+  const [accountId, credential] = recoveryInput.value.trim().split('.')
+  if (!/^[0-9a-f-]{36}$/i.test(accountId || '') || !/^[A-Za-z0-9_-]{40,60}$/.test(credential || '')) { ping('Il codice di recupero non è valido'); return }
+  const account = { id: 'cloud-account', accountId, credential, revision: null, dirty: false, restoredAt: Date.now() }
+  await put('settings', account); state.value = await readAll()
+  try {
+    const response = await cloudRequest('GET', account)
+    if (!response.ok) throw new Error('Il codice non è valido o la copia online non è disponibile.')
+    const remote = await response.json()
+    if (remote.snapshot) {
+      const data = await decryptSnapshot(remote.snapshot, credential)
+      await replaceAll(data)
+      await put('settings', { ...account, revision: remote.revision })
+    }
+    state.value = await readAll(); recoveryInput.value = ''; syncLabel.value = 'Sincronizzato con Claude'; ping('Archivio cloud collegato')
+  } catch (error) { await remove('settings', account.id); state.value = await readAll(); ping(error.message) }
+}
+async function deleteCloudCopy() {
+  const account = cloudSettings()
+  if (!account || !window.confirm('Eliminare la copia cifrata online e revocare Claude? I dati locali resteranno su questo iPhone.')) return
+  const response = await cloudRequest('DELETE', account, { accountId: account.accountId })
+  if (!response.ok) { ping('Non riesco a eliminare la copia online'); return }
+  await remove('settings', account.id); state.value = await readAll(); pairingCode.value = ''; syncLabel.value = 'Salvato su questo iPhone'; ping('Copia online eliminata')
+}
+async function disconnectClaude() {
+  const account = cloudSettings()
+  if (!account) return
+  const credential = bytesToBase64Url(crypto.getRandomValues(new Uint8Array(32)))
+  const response = await cloudRequest('POST', account, { newCredential: credential })
+  if (!response.ok) { ping('Non riesco a revocare il collegamento online'); return }
+  await put('settings', { ...account, credential, revision: account.revision || null })
+  pairingCode.value = ''
+  state.value = await readAll()
+  await syncLocal()
+  ping('Collegamento Claude revocato')
+}
 function switchTo(id) { section.value = id; showMobileNav.value = false }
 function ping(message) { toast.value = message; window.setTimeout(() => { toast.value = '' }, 2600) }
 function beginAdd(type, extra = {}) {
-  form.value = { title: '', date: todayKey, time: '', priority: false, done: false, progress: 0, color: '#dbe8c7', notes: '', ...extra }
+  form.value = { title: '', date: todayKey, time: '', priority: false, done: false, progress: 0, color: '#bdebf0', notes: '', ...extra }
   modal.value = type
 }
 async function saveForm() {
@@ -65,11 +191,11 @@ async function saveForm() {
   if (type === 'task') await put('tasks', { ...form.value, id: newId(), title: form.value.title.trim(), updatedAt: Date.now() })
   if (type === 'project') await put('projects', { ...form.value, id: newId(), title: form.value.title.trim(), progress: Number(form.value.progress) })
   if (type === 'idea') await put('ideas', { ...form.value, id: newId(), title: form.value.title.trim(), createdAt: Date.now() })
-  state.value = await readAll(); modal.value = null; ping('Aggiunto ai tuoi spazi')
+  await refreshAndSync(); modal.value = null; ping('Aggiunto ai tuoi spazi')
 }
-async function toggleTask(task) { await put('tasks', { ...task, done: !task.done }); state.value = await readAll() }
-async function deleteItem(store, item) { await remove(store, item.id); state.value = await readAll(); ping('Elemento eliminato') }
-async function setProgress(project, value) { await put('projects', { ...project, progress: Number(value) }); state.value = await readAll() }
+async function toggleTask(task) { await put('tasks', { ...task, done: !task.done }); await refreshAndSync() }
+async function deleteItem(store, item) { await remove(store, item.id); await refreshAndSync(); ping('Elemento eliminato') }
+async function setProgress(project, value) { await put('projects', { ...project, progress: Number(value) }); await refreshAndSync() }
 function sectionTitle(id = section.value) { return nav.find(item => item.id === id)?.label || 'Oggi' }
 function shortDate(date) { return new Intl.DateTimeFormat('it-IT', { weekday: 'short', day: 'numeric' }).format(date) }
 function tasksOn(date) { return state.value.tasks.filter(task => task.date === keyDate(date)).sort((a, b) => (a.time || '99:99').localeCompare(b.time || '99:99')) }
@@ -79,7 +205,7 @@ function saveFile(name, content, mime) {
   const url = URL.createObjectURL(new Blob([content], { type: mime })); const link = document.createElement('a'); link.href = url; link.download = name; link.click(); URL.revokeObjectURL(url)
 }
 function exportBackup() {
-  const backup = { app: 'DAYLY', formatVersion: 1, exportedAt: new Date().toISOString(), data: state.value }
+  const backup = { app: 'DAYLY', formatVersion: 1, exportedAt: new Date().toISOString(), data: { ...state.value, settings: state.value.settings.filter(item => item.id !== 'cloud-account') } }
   saveFile(`dayly-backup-${todayKey}.json`, JSON.stringify(backup, null, 2), 'application/json')
   ping('Backup esportato')
 }
@@ -89,71 +215,23 @@ async function importBackup(event) {
     const parsed = JSON.parse(await file.text()); const data = parsed.data || parsed
     const stores = ['tasks', 'projects', 'ideas', 'reviews', 'settings']
     if (!data || !stores.every(name => Array.isArray(data[name]))) throw new Error('Formato non valido')
-    await replaceAll(data); state.value = await readAll(); ping('Backup ripristinato')
+    const account = cloudSettings()
+    const restored = { ...data, settings: account ? [...data.settings.filter(item => item.id !== 'cloud-account'), account] : data.settings }
+    await replaceAll(restored); await refreshAndSync(); ping('Backup ripristinato')
   } catch { ping('Il file selezionato non è un backup DAYLY valido') }
   event.target.value = ''
 }
 async function saveDailyReview() {
   const notes = document.querySelector('#daily-notes')?.value ?? ''
   await put('reviews', { id: `day-${todayKey}`, period: 'day', date: todayKey, notes, completedCount: doneToday.value, updatedAt: Date.now() })
-  state.value = await readAll(); ping('Riflessione salvata')
+  await refreshAndSync(); ping('Riflessione salvata')
 }
 async function saveWeeklyFocus() {
   const focus = document.querySelector('#weekly-focus')?.value ?? ''
   await put('reviews', { id: 'week', period: 'week', focus, updatedAt: Date.now() })
-  state.value = await readAll(); ping('Focus della settimana salvato')
+  await refreshAndSync(); ping('Focus della settimana salvato')
 }
 function dateTasks(d) { return tasksOn(d).length ? tasksOn(d).map(t => `${t.time ? `${t.time} · ` : ''}${t.title}`).join('\n') : 'Nessun impegno per ora' }
-
-async function askAssistant() {
-  const message = assistantText.value.trim(); if (!message || assistantBusy.value) return
-  assistantMessages.value.push({ role: 'user', text: message }); assistantText.value = ''; assistantBusy.value = true
-  try {
-    const response = await fetch('/api/assistant', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message, data: { tasks: state.value.tasks, projects: state.value.projects, ideas: state.value.ideas, reviews: state.value.reviews } }) })
-    const result = await response.json()
-    if (response.status === 503 && result.code === 'AI_KEY_MISSING') {
-      assistantMessages.value.push({ role: 'assistant', text: 'La chiave AI non è ancora configurata. Puoi già usare tutte le funzioni locali di DAYLY. Quando vuoi attivare l’assistente, aggiungi OPENAI_API_KEY nelle variabili ambiente del progetto Vercel e ridistribuisci.' })
-    } else if (!response.ok) throw new Error(result.error || 'Servizio momentaneamente non disponibile.')
-    else {
-      assistantMessages.value.push({ role: 'assistant', text: result.message || 'Ecco una proposta per la tua giornata.' })
-      if (Array.isArray(result.actions) && result.actions.length) proposal.value = result
-    }
-  } catch (error) { assistantMessages.value.push({ role: 'assistant', text: `${error.message || 'Non riesco a raggiungere il servizio.'} Le tue attività restano salvate sul dispositivo.` }) }
-  finally { assistantBusy.value = false }
-}
-async function applyProposal() {
-  if (!proposal.value) return
-  const priorityCounts = new Map()
-  for (const task of state.value.tasks) {
-    if (task.priority) priorityCounts.set(task.date, (priorityCounts.get(task.date) || 0) + 1)
-  }
-  for (const action of proposal.value.actions) {
-    if (action.type === 'create_task' && typeof action.title === 'string') {
-      const date = /^\d{4}-\d{2}-\d{2}$/.test(action.date) ? action.date : todayKey
-      const projectId = state.value.projects.find(project => project.title.toLowerCase() === String(action.project || '').toLowerCase())?.id || ''
-      const priority = Boolean(action.priority) && (priorityCounts.get(date) || 0) < 3
-      if (priority) priorityCounts.set(date, (priorityCounts.get(date) || 0) + 1)
-      await put('tasks', { id: newId(), title: action.title, date, time: /^\d{2}:\d{2}$/.test(action.time) ? action.time : '', done: false, priority, projectId, createdAt: Date.now() })
-    }
-    if (action.type === 'update_progress') {
-      const project = state.value.projects.find(item => item.id === action.projectId || item.title.toLowerCase() === String(action.project || '').toLowerCase())
-      if (project && Number.isFinite(Number(action.progress))) await put('projects', { ...project, progress: Math.max(0, Math.min(100, Number(action.progress))) })
-    }
-    if (action.type === 'complete_task') {
-      const task = state.value.tasks.find(item => item.id === action.taskId || item.title.toLowerCase() === String(action.title || '').toLowerCase())
-      if (task) await put('tasks', { ...task, done: true })
-    }
-    if (action.type === 'reschedule_task') {
-      const task = state.value.tasks.find(item => item.id === action.taskId || item.title.toLowerCase() === String(action.title || '').toLowerCase())
-      if (task) await put('tasks', {
-        ...task,
-        date: /^\d{4}-\d{2}-\d{2}$/.test(action.date) ? action.date : task.date,
-        time: action.time === '' || /^\d{2}:\d{2}$/.test(action.time) ? action.time : task.time,
-      })
-    }
-  }
-  proposal.value = null; state.value = await readAll(); ping('Proposta applicata')
-}
 
 const todayReview = computed(() => state.value.reviews.find(item => item.id === `day-${todayKey}`))
 </script>
@@ -161,7 +239,7 @@ const todayReview = computed(() => state.value.reviews.find(item => item.id === 
 <template>
   <div class="app-shell">
     <aside class="sidebar">
-      <a class="brand" href="#" @click.prevent="switchTo('today')"><span class="brand-mark">d</span><span>dayly<span class="brand-dot">.</span></span></a>
+      <a class="brand" href="#" @click.prevent="switchTo('today')"><img class="brand-mark" src="/logo.jpg" alt="" /><span>dayly<span class="brand-dot">.</span></span></a>
       <div class="side-caption">IL TUO SPAZIO</div>
       <nav class="nav-list" aria-label="Navigazione principale">
         <button v-for="item in nav" :key="item.id" class="nav-item" :class="{ active: section === item.id }" @click="switchTo(item.id)">
@@ -251,12 +329,11 @@ const todayReview = computed(() => state.value.reviews.find(item => item.id === 
 
         <section v-else-if="section === 'assistant'" class="page assistant-page">
           <div class="page-heading plain-heading"><div><div class="date-kicker">UN PENSIERO IN PIÙ, QUANDO SERVE</div><h1>Facciamo ordine <em>insieme.</em></h1><p class="subheading">Un assistente gentile per aiutarti a fare spazio.</p></div></div>
-          <div class="assistant-layout"><section class="panel chat-panel"><div class="chat-header"><div class="assistant-avatar"><Sparkles :size="19" /></div><div><strong>DAYLY assistant</strong><span><i></i> pronto ad ascoltarti</span></div><button class="icon-button" aria-label="Cancella conversazione" @click="assistantMessages = []; proposal = null"><Trash2 :size="16" /></button></div><div class="chat-body"><div v-if="!assistantMessages.length" class="chat-welcome"><div class="welcome-spark">✳</div><h2>Da dove vuoi cominciare?</h2><p>Possiamo guardare insieme i tuoi impegni, trovare un ritmo più leggero o fare spazio a una nuova idea.</p><div class="suggestion-chips"><button @click="assistantText = 'Aiutami a organizzare la giornata'; askAssistant()">Organizziamo la giornata <ArrowUpRight :size="13" /></button><button @click="assistantText = 'Riorganizza i miei impegni in modo realistico'; askAssistant()">Rendiamo la settimana più leggera <ArrowUpRight :size="13" /></button><button @click="assistantText = 'Fammi un riepilogo dei miei progetti'; askAssistant()">Guardiamo i miei progressi <ArrowUpRight :size="13" /></button></div></div><div v-else class="message-list"><div v-for="(msg, i) in assistantMessages" :key="i" class="chat-message" :class="msg.role"><div v-if="msg.role === 'assistant'" class="message-mark"><Sparkles :size="14" /></div><p>{{ msg.text }}</p></div><div v-if="assistantBusy" class="chat-message assistant"><div class="message-mark"><Sparkles :size="14" /></div><p class="typing">Sto pensando<span>…</span></p></div><div v-if="proposal" class="proposal-card"><div class="proposal-heading"><CheckCircle2 :size="17" /><strong>Una proposta, da rivedere insieme</strong></div><p>{{ proposal.actions.length }} modifiche suggerite. Nulla cambia finché non confermi.</p><ul><li v-for="(action, i) in proposal.actions" :key="i">{{ action.type === 'create_task' ? `Aggiungi: ${action.title}${action.date ? ` · ${action.date}` : ''}${action.time ? ` alle ${action.time}` : ''}` : action.type === 'update_progress' ? `Aggiorna il progresso di ${action.project || 'un progetto'} al ${action.progress}%` : action.type === 'reschedule_task' ? `Sposta ${action.title} a ${action.date || 'una nuova data'}${action.time ? ` · ${action.time}` : ''}` : action.type === 'complete_task' ? `Segna come completata: ${action.title}` : 'Proposta da verificare' }}</li></ul><div class="proposal-actions"><button class="text-button" @click="proposal = null">Ignora</button><button class="primary-button" @click="applyProposal"><Check :size="15" /> Conferma le modifiche</button></div></div></div></div>
-            <div class="chat-input-wrap"><form class="chat-input" @submit.prevent="askAssistant"><textarea v-model="assistantText" rows="1" placeholder="Scrivi quello che hai in mente…" aria-label="Messaggio per l’assistente" @keydown.enter.exact.prevent="askAssistant"></textarea><button type="submit" :disabled="assistantBusy || !assistantText.trim()" aria-label="Invia messaggio"><Send :size="17" /></button></form><div class="chat-foot"><span><Sparkles :size="12" /> Le proposte chiedono sempre la tua conferma</span><span>I dati vengono inviati al servizio AI quando scrivi</span></div></div></section>
-            <aside class="assistant-side"><section class="panel privacy-card"><div class="privacy-icon"><Heart :size="18" /></div><div class="eyebrow">UN AIUTO CON DELICATEZZA</div><h3>Le scelte restano tue.</h3><p>L’assistente legge i dati che hai salvato qui per darti suggerimenti più utili. Prima di inviare, puoi vedere il messaggio che hai scritto.</p><div class="privacy-rule"><CheckCircle2 :size="15" /> Non applica modifiche senza il tuo consenso</div><div class="privacy-rule"><CheckCircle2 :size="15" /> I tuoi dati restano salvati su questo dispositivo</div></section><section class="panel context-card"><div class="eyebrow">NELLA TUA GIORNATA</div><div class="context-row"><ListTodo :size="16" /><span>Attività</span><strong>{{ state.tasks.length }}</strong></div><div class="context-row"><Target :size="16" /><span>Progetti</span><strong>{{ state.projects.length }}</strong></div><div class="context-row"><Lightbulb :size="16" /><span>Idee</span><strong>{{ state.ideas.length }}</strong></div><button class="inline-link" @click="assistantMessages = []; proposal = null">Nuova conversazione <ArrowRight :size="14" /></button></section></aside></div>
+          <div class="assistant-layout"><section class="panel claude-connect"><div class="claude-mark"><img src="/logo.jpg" alt="" /></div><div class="eyebrow">CLAUDE · COLLEGAMENTO PERSONALE</div><h2>Usa Claude con il tuo piano</h2><p>DAYLY prepara un collegamento sicuro. Poi puoi chiedere a Claude di leggere agenda, progetti e idee, e proporre modifiche. I dati restano cifrati nel cloud; le funzioni locali continuano a funzionare offline.</p><div v-if="cloudSettings()" class="sync-status"><CheckCircle2 :size="16" /> {{ syncLabel }}</div><div class="claude-actions"><button class="primary-button" :disabled="cloudBusy" @click="connectClaude">{{ cloudBusy ? 'Preparo il collegamento…' : cloudSettings() ? 'Genera codice temporaneo per Claude' : 'Attiva la sincronizzazione protetta' }}</button><button v-if="cloudSettings()" class="text-button" @click="disconnectClaude">Revoca Claude e rinnova il codice segreto</button><button v-if="cloudSettings()" class="text-button danger-link" @click="deleteCloudCopy">Elimina anche la copia online</button><button v-if="cloudSettings()" class="secondary-button" @click="copyRecoveryCode">Copia codice di recupero per un altro iPhone</button></div><div v-if="!cloudSettings()" class="recovery-panel"><label for="recovery-code">Hai già un codice di recupero?</label><div><input id="recovery-code" v-model="recoveryInput" placeholder="ID.chiave personale" /><button class="secondary-button" @click="restoreCloudConnection">Ripristina</button></div></div><div v-if="pairingCode" class="pair-code"><span>CODICE TEMPORANEO · 5 MINUTI</span><code>{{ pairingCode }}</code><button class="secondary-button" @click="copyPairingCode">Copia il codice</button></div><ol class="connector-steps"><li>In Claude apri <strong>Impostazioni → Connettori → Aggiungi connettore personalizzato</strong>.</li><li>Inserisci <code>https://dayly-delta.vercel.app/api/mcp</code> e avvia la connessione.</li><li>Quando si apre la pagina DAYLY, incolla il codice temporaneo e autorizza.</li><li>In Claude chiedi di consultare DAYLY. Le modifiche richiedono una tua conferma esplicita.</li></ol><div class="cloud-cost-note"><strong>Privacy e costi.</strong> Il contenuto viene cifrato prima dell’invio; il codice temporaneo scade e puoi revocare Claude qui. Lo spazio Vercel Blob include quote mensili e può avere costi se superate, secondo il piano Vercel.</div></section>
+            <aside class="assistant-side"><section class="panel privacy-card"><div class="privacy-icon"><Heart :size="18" /></div><div class="eyebrow">UN AIUTO CON DELICATEZZA</div><h3>Le scelte restano tue.</h3><p>Claude legge i dati che hai scelto di sincronizzare. Può solo applicare modifiche dopo una tua conferma esplicita nella chat.</p><div class="privacy-rule"><CheckCircle2 :size="15" /> Dati cifrati prima della sincronizzazione</div><div class="privacy-rule"><CheckCircle2 :size="15" /> Nessuna chiave API AI nell’app</div><div class="privacy-rule"><CheckCircle2 :size="15" /> Revoca disponibile da DAYLY</div></section><section class="panel context-card"><div class="eyebrow">NELLA TUA GIORNATA</div><div class="context-row"><ListTodo :size="16" /><span>Attività</span><strong>{{ state.tasks.length }}</strong></div><div class="context-row"><Target :size="16" /><span>Progetti</span><strong>{{ state.projects.length }}</strong></div><div class="context-row"><Lightbulb :size="16" /><span>Idee</span><strong>{{ state.ideas.length }}</strong></div></section></aside></div>
         </section>
       </template>
-      <footer class="footer"><span>DAYLY <i>·</i> uno spazio tutto tuo</span><span>Dati salvati in locale <span class="footer-dot">●</span></span></footer>
+      <footer class="footer"><span>DAYLY <i>·</i> uno spazio tutto tuo</span><span>{{ cloudSettings() ? 'Locale · copia cifrata online' : 'Dati salvati in locale' }} <span class="footer-dot">●</span></span></footer>
     </main>
 
     <nav class="bottom-nav" aria-label="Navigazione mobile"><button v-for="item in nav.slice(0, 5)" :key="item.id" :class="{ active: section === item.id }" @click="switchTo(item.id)"><component :is="item.icon" :size="19" /><span>{{ item.label }}</span></button><button :class="{ active: section === 'assistant' }" @click="switchTo('assistant')"><MessageCircle :size="19" /><span>AI</span></button></nav>
