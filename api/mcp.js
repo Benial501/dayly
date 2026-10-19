@@ -36,12 +36,27 @@ async function saveUser(user, data) {
   await writePrivateJson(`${user.root}/snapshot.json`, { snapshot, updatedAt: Date.now() })
   await writePrivateJson(`${user.root}/meta.json`, { ...currentMetadata, revision })
 }
+const line = (value, max) => typeof value === 'string' ? value.trim().slice(0, max) : ''
+const isDay = (value) => /^\d{4}-\d{2}-\d{2}$/.test(value || '')
+const isLink = (value) => typeof value === 'string' && /^https:\/\/[^\s]+$/.test(value)
+const sameMail = (a, b) => (a.link && b.link ? a.link === b.link : a.mittente === b.mittente && a.oggetto === b.oggetto)
+async function readMailbox(user) {
+  const document = await readPrivateJson(`${user.root}/mailbox.json`)
+  if (!document?.casella) return []
+  const list = decryptSnapshot(document.casella, user.accountKey)
+  return Array.isArray(list) ? list : []
+}
+async function writeMailbox(user, list) {
+  const revision = `${Date.now()}-${randomBytes(8).toString('hex')}`
+  await writePrivateJson(`${user.root}/mailbox.json`, { casella: encryptSnapshot(list, user.accountKey), revision, updatedAt: Date.now() })
+}
 function errorResponse(id, code, message) { return { jsonrpc: '2.0', id, error: { code, message } } }
 function success(id, result) { return { jsonrpc: '2.0', id, result } }
 
 const tools = [
   { name: 'dayly_leggi_dati', description: 'Legge attività, progetti, idee e riepiloghi salvati dall’utente in DAYLY. Usa questi dati solo per la richiesta corrente.', inputSchema: { type: 'object', properties: { periodo: { type: 'string', enum: ['oggi', 'settimana', 'tutti'], description: 'Seleziona quali attività includere.' } } } },
   { name: 'dayly_proponi_modifiche', description: 'Invia a DAYLY una lista di modifiche proposte. Non cambia i dati: l’utente le trova nell’app come schede da accettare o rifiutare una per una. Usa questo strumento quando l’utente ti chiede di organizzargli qualcosa, poi digli che le proposte lo aspettano in DAYLY.', inputSchema: { type: 'object', properties: { nota: { type: 'string', description: 'Una frase che spiega all’utente cosa hai proposto e perché.' }, modifiche: { type: 'array', items: { type: 'object', properties: { tipo: { type: 'string', enum: ['aggiungi_attivita','sposta_attivita','aggiorna_progresso','completa_attivita'] }, titolo: { type: 'string' }, data: { type: 'string' }, ora: { type: 'string' }, priorita: { type: 'boolean' }, progetto: { type: 'string' }, progresso: { type: 'number' } }, required: ['tipo'] } } }, required: ['modifiche'] } },
+  { name: 'dayly_segnala_email', description: 'Deposita in DAYLY le email importanti che l’utente deve vedere. L’app le mostra come schede con mittente, oggetto e motivo: da lì l’utente le apre nella posta o le trasforma in attività. Non modifica i dati DAYLY. Passa solo mittente, oggetto e il motivo per cui conta, mai il testo del messaggio. Dopo averlo usato, di’ all’utente che le email lo aspettano in DAYLY invece di rielencarle in chat.', inputSchema: { type: 'object', properties: { nota: { type: 'string', description: 'Una frase che spiega all’utente perché ha senso guardare queste email adesso.' }, email: { type: 'array', description: 'Da una a dieci email, dalla più importante.', items: { type: 'object', properties: { mittente: { type: 'string', description: 'Chi scrive: nome o indirizzo.' }, oggetto: { type: 'string', description: 'L’oggetto del messaggio.' }, motivo: { type: 'string', description: 'Perché è importante, in una frase.' }, ricevuta: { type: 'string', description: 'Giorno in cui è arrivata, in formato AAAA-MM-GG.' }, scadenza: { type: 'string', description: 'Entro quando va gestita, in formato AAAA-MM-GG, se il messaggio lo dice.' }, link: { type: 'string', description: 'Link https per aprire il messaggio nella posta.' } }, required: ['mittente','oggetto','motivo'] } } }, required: ['email'] } },
   { name: 'dayly_applica_modifiche', description: 'Applica in DAYLY le modifiche già mostrate all’utente solo dopo che ha scritto chiaramente che le conferma. Ripeti la frase di conferma nella motivazione; se non ha confermato, non chiamare questo strumento.', inputSchema: { type: 'object', properties: { motivazione: { type: 'string', description: 'Frase esplicita di conferma dell’utente nella conversazione corrente.' }, modifiche: { type: 'array', items: { type: 'object', properties: { tipo: { type: 'string', enum: ['aggiungi_attivita','sposta_attivita','aggiorna_progresso','completa_attivita'] }, titolo: { type: 'string' }, data: { type: 'string' }, ora: { type: 'string' }, progetto: { type: 'string' }, progresso: { type: 'number' } }, required: ['tipo'] } } }, required: ['motivazione','modifiche'] } },
 ]
 
@@ -69,7 +84,7 @@ export default async function handler(request, response) {
   const name = params.name
   const args = params.arguments || {}
   if (name === 'dayly_applica_modifiche' && !String(claims.scope || '').split(' ').includes('dayly:write')) return response.status(200).json(errorResponse(id, -32003, 'Il connettore non ha il permesso di scrivere.'))
-  if (['dayly_leggi_dati', 'dayly_proponi_modifiche'].includes(name) && !String(claims.scope || '').split(' ').includes('dayly:read')) return response.status(200).json(errorResponse(id, -32003, 'Il connettore non ha il permesso di leggere.'))
+  if (['dayly_leggi_dati', 'dayly_proponi_modifiche', 'dayly_segnala_email'].includes(name) && !String(claims.scope || '').split(' ').includes('dayly:read')) return response.status(200).json(errorResponse(id, -32003, 'Il connettore non ha il permesso di leggere.'))
   if (name === 'dayly_leggi_dati') {
     let result = user.data
     if (args.periodo === 'oggi') {
@@ -100,6 +115,36 @@ export default async function handler(request, response) {
       stato: 'Proposta inviata a DAYLY. Nessun dato è stato modificato.',
       inviate: proposed.length,
       messaggio: 'Di’ all’utente che le proposte lo aspettano in DAYLY, dove le accetta o le rifiuta una per una. Non chiedere conferma in chat per queste.',
+    })))
+  }
+  if (name === 'dayly_segnala_email') {
+    const incoming = (Array.isArray(args.email) ? args.email : []).slice(0, 10)
+    const nota = typeof args.nota === 'string' ? args.nota.slice(0, 300) : ''
+    const reported = incoming.map(item => ({
+      mittente: line(item.mittente, 120),
+      oggetto: line(item.oggetto, 200),
+      motivo: line(item.motivo, 300),
+      ricevuta: isDay(item.ricevuta) ? item.ricevuta : '',
+      scadenza: isDay(item.scadenza) ? item.scadenza : '',
+      link: isLink(item.link) ? item.link.slice(0, 500) : '',
+    })).filter(item => item.mittente && item.oggetto && item.motivo)
+    if (!reported.length) return response.status(200).json(success(id, { ...text('Serve almeno una email con mittente, oggetto e motivo.'), isError: true }))
+    const now = Date.now()
+    let mailbox = []
+    try { mailbox = await readMailbox(user) } catch { return response.status(200).json(success(id, { ...text('Non sono riuscito ad aprire la casella DAYLY.'), isError: true })) }
+    const merged = mailbox.filter(item => now - Number(item.createdAt || 0) < WEEK)
+    for (const mail of reported) {
+      const existing = merged.findIndex(item => sameMail(item, mail))
+      const record = { id: existing >= 0 ? merged[existing].id : randomBytes(8).toString('hex'), createdAt: now, nota, ...mail }
+      if (existing >= 0) merged[existing] = record
+      else merged.push(record)
+    }
+    try { await writeMailbox(user, merged.slice(-20)) }
+    catch { return response.status(200).json(success(id, { ...text('Non sono riuscito a consegnare le email a DAYLY.'), isError: true })) }
+    return response.status(200).json(success(id, text({
+      stato: 'Email consegnate a DAYLY. Nessun dato è stato modificato.',
+      consegnate: reported.length,
+      messaggio: 'Di’ all’utente che le trova in DAYLY, dove le apre nella posta, le trasforma in attività o le archivia. Non rielencarle in chat.',
     })))
   }
   if (name === 'dayly_applica_modifiche') {

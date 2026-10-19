@@ -1,6 +1,6 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
-import { ArrowDownToLine, ArrowLeft, Compass, NotebookPen, ArrowRight, PenLine, RefreshCw, Sparkles, CalendarDays, Check, CheckCircle2, ChevronRight, Clock3, CloudOff, Flag, Lightbulb, ListTodo, MessageCircle, Moon, Plus, Settings2, Sun, Target, Trash2, Upload, X } from 'lucide-vue-next'
+import { Archive, ArrowDownToLine, ArrowLeft, Compass, NotebookPen, ArrowRight, ExternalLink, Mail, PenLine, RefreshCw, Sparkles, CalendarDays, Check, CheckCircle2, ChevronRight, Clock3, CloudOff, Flag, Lightbulb, ListTodo, MessageCircle, Moon, Plus, Settings2, Sun, Target, Trash2, Upload, X } from 'lucide-vue-next'
 import { readAll, put, remove, replaceAll } from './db'
 import { sound } from './sound'
 
@@ -102,6 +102,7 @@ async function loadInitialState() {
   if (account && navigator.onLine) {
     try { if (account.dirty) await syncLocal(true); else await hydrateCloud(account) } catch { syncLabel.value = 'Dati locali · sincronizzazione da verificare' }
     fetchProposals()
+    fetchMailbox()
   }
 }
 async function syncLocal(showError = false) {
@@ -269,9 +270,10 @@ const isOnline = ref(navigator.onLine)
 window.addEventListener('online', () => { isOnline.value = true })
 window.addEventListener('offline', () => { isOnline.value = false })
 
-const statusAlert = computed(() => proposalCount.value > 0 || !isOnline.value || /ricarica|verificare/i.test(syncLabel.value))
+const statusAlert = computed(() => proposalCount.value > 0 || mailCount.value > 0 || !isOnline.value || /ricarica|verificare/i.test(syncLabel.value))
 const syncState = computed(() => {
   if (proposalCount.value) return { label: `Claude ha ${proposalCount.value} ${proposalCount.value === 1 ? 'proposta' : 'proposte'} per te`, tone: 'violet', icon: Sparkles }
+  if (mailCount.value) return { label: `Claude ti segnala ${mailCount.value} email da vedere`, tone: 'sky', icon: Mail }
   if (!isOnline.value) return { label: 'Offline · le funzioni locali restano attive', tone: 'peach', icon: CloudOff }
   if (/ricarica|verificare/i.test(syncLabel.value)) return { label: 'Dati cambiati altrove · ricarica prima di modificare', tone: 'peach', icon: CloudOff }
   if (cloudSettings()) return { label: syncLabel.value, tone: 'mint', icon: CheckCircle2 }
@@ -542,7 +544,100 @@ async function dismissPending() {
   const sources = pendingSource.value.slice()
   pending.value = []
   pendingSource.value = []
+  pendingMail.value = ''
   if (sources.length) { await clearProposals(sources); ping('Proposte rifiutate', 'removed') }
+}
+
+/* ── email importanti segnalate da Claude ── */
+const WEEK_MS = 7 * 24 * 60 * 60 * 1000
+const mailbox = ref([])
+const mailboxRevision = ref(null)
+const mailboxBusy = ref(false)
+const showMailbox = ref(false)
+const pendingMail = ref('')
+
+const mailCount = computed(() => mailbox.value.length)
+const mailNote = computed(() => [...new Set(mailbox.value.map(mail => mail.nota).filter(Boolean))].join(' '))
+
+function mailMeta(mail) {
+  const parts = []
+  if (/^\d{4}-\d{2}-\d{2}$/.test(mail.ricevuta || '')) parts.push(mail.ricevuta === todayKey ? 'arrivata oggi' : `arrivata il ${longDate(new Date(`${mail.ricevuta}T12:00:00`))}`)
+  if (/^\d{4}-\d{2}-\d{2}$/.test(mail.scadenza || '')) parts.push(mail.scadenza === todayKey ? 'da gestire oggi' : `entro il ${longDate(new Date(`${mail.scadenza}T12:00:00`))}`)
+  return parts.join(' · ')
+}
+
+async function fetchMailbox(showError = false) {
+  const account = cloudSettings()
+  if (!account || !navigator.onLine || mailboxBusy.value) return
+  mailboxBusy.value = true
+  try {
+    const response = await fetch(`/api/mailbox?accountId=${encodeURIComponent(account.accountId)}`, { headers: { Authorization: `Bearer ${account.credential}` } })
+    if (!response.ok) throw new Error('Non riesco a leggere le email segnalate.')
+    const remote = await response.json()
+    mailboxRevision.value = remote.revision || null
+    const now = Date.now()
+    const list = remote.casella ? await decryptSnapshot(remote.casella, account.credential) : []
+    mailbox.value = (Array.isArray(list) ? list : [])
+      .filter(mail => now - Number(mail.createdAt || 0) < WEEK_MS)
+      .sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0))
+  } catch (error) {
+    if (showError) ping(error.message)
+  } finally {
+    mailboxBusy.value = false
+  }
+}
+
+async function saveMailbox(list) {
+  const account = cloudSettings()
+  if (!account) return false
+  try {
+    const casella = list.length ? await encryptSnapshot(list, account.credential) : null
+    const response = await fetch('/api/mailbox', {
+      method: 'PUT',
+      headers: { Authorization: `Bearer ${account.credential}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ accountId: account.accountId, casella, revision: mailboxRevision.value }),
+    })
+    const result = await response.json()
+    if (response.status === 409) { await fetchMailbox(); ping('Claude ha segnalato altre email: ricontrolla la casella'); return false }
+    if (!response.ok) throw new Error(result.error || 'Non riesco ad aggiornare la casella.')
+    mailboxRevision.value = result.revision || null
+    mailbox.value = list
+    return true
+  } catch (error) { ping(error.message); return false }
+}
+
+async function removeMail(id) {
+  const remaining = mailbox.value.filter(mail => mail.id !== id)
+  const saved = await saveMailbox(remaining)
+  if (saved && !remaining.length) showMailbox.value = false
+  return saved
+}
+
+async function archiveMail(id) {
+  if (await removeMail(id)) ping('Email archiviata', 'removed')
+}
+
+async function archiveAllMails() {
+  if (await saveMailbox([])) { showMailbox.value = false; ping('Casella svuotata', 'removed') }
+}
+
+function openMailbox() { showMailbox.value = true }
+
+function mailToTask(mail) {
+  pendingMail.value = mail.id
+  pendingSource.value = []
+  pending.value = [{
+    tipo: 'aggiungi_attivita',
+    titolo: mail.oggetto.slice(0, 160),
+    data: /^\d{4}-\d{2}-\d{2}$/.test(mail.scadenza || '') ? mail.scadenza : todayKey,
+    ora: '',
+    priorita: false,
+    progetto: '',
+    progresso: 0,
+    id: newId(),
+    origine: 'email',
+  }]
+  showMailbox.value = false
 }
 
 /* ── anteprima condivisa: cattura veloce e proposte di Claude ── */
@@ -625,9 +720,12 @@ async function applyPending() {
     }
   }
   const sources = pendingSource.value.slice()
+  const fromMail = pendingMail.value
   pending.value = []
   pendingSource.value = []
+  pendingMail.value = ''
   if (sources.length) await clearProposals(sources)
+  if (fromMail && applied) await removeMail(fromMail)
   await refreshAndSync()
   // dopo aver scritto, mostro il risultato invece di lasciarti dov'eri
   if (!['today', 'calendar'].includes(section.value)) switchTo('today')
@@ -668,7 +766,7 @@ function openCapture() {
             <h1 class="page-title">La tua giornata</h1>
           </div>
 
-          <button v-if="statusAlert" class="status-row" :class="`status-${syncState.tone}`" @click="proposalCount ? openClaudeProposals() : switchTo('settings')">
+          <button v-if="statusAlert" class="status-row" :class="`status-${syncState.tone}`" @click="proposalCount ? openClaudeProposals() : mailCount ? openMailbox() : switchTo('settings')">
             <component :is="syncState.icon" :size="15" />
             <span>{{ syncState.label }}</span>
             <ChevronRight :size="15" />
@@ -681,6 +779,15 @@ function openCapture() {
             </div>
             <p v-if="proposalNote" class="project-note">{{ proposalNote }}</p>
             <button class="btn btn-block" style="margin-top:14px" @click="openClaudeProposals">Guarda cosa propone</button>
+          </section>
+
+          <section v-if="mailCount" class="card">
+            <div class="card-head">
+              <h2>Email da non perdere<span class="head-sub">{{ mailCount }} {{ mailCount === 1 ? 'segnalazione' : 'segnalazioni' }} di Claude</span></h2>
+              <span class="row-icon tone-sky"><Mail :size="18" /></span>
+            </div>
+            <p v-if="mailNote" class="project-note">{{ mailNote }}</p>
+            <button class="btn btn-block" style="margin-top:14px" @click="openMailbox">Guarda quali email</button>
           </section>
 
           <section class="card">
@@ -948,8 +1055,8 @@ function openCapture() {
               <button class="btn btn-soft" @click="copyPairingCode">Copia il codice</button>
             </div>
 
-            <button class="btn btn-soft btn-block" style="margin-top:14px" :disabled="proposalsBusy || !cloudSettings()" @click="fetchProposals(true)">
-              <RefreshCw :size="16" /> {{ proposalsBusy ? 'Controllo…' : 'Controlla se ci sono proposte' }}
+            <button class="btn btn-soft btn-block" style="margin-top:14px" :disabled="proposalsBusy || mailboxBusy || !cloudSettings()" @click="fetchProposals(true); fetchMailbox(true)">
+              <RefreshCw :size="16" /> {{ proposalsBusy || mailboxBusy ? 'Controllo…' : 'Controlla proposte ed email' }}
             </button>
 
             <ol class="steps">
@@ -977,6 +1084,7 @@ function openCapture() {
             <div class="note-line"><Check :size="16" /><span>Aggiungere un’attività o spostarla a un altro giorno.</span></div>
             <div class="note-line"><Check :size="16" /><span>Segnare un’attività come completata.</span></div>
             <div class="note-line"><Check :size="16" /><span>Aggiornare la percentuale di un progetto.</span></div>
+            <div class="note-line"><Check :size="16" /><span>Segnalarti le email importanti: le vedi qui, le apri nella posta o le trasformi in attività.</span></div>
           </section>
 
           <section class="card">
@@ -1054,13 +1162,48 @@ function openCapture() {
       </section>
     </div>
 
+    <!-- email importanti segnalate da Claude -->
+    <div v-if="showMailbox" class="backdrop" @click.self="showMailbox = false">
+      <section class="sheet">
+        <div class="sheet-grip"></div>
+        <div class="sheet-head">
+          <div>
+            <h2>Email da non perdere</h2>
+            <p>Le ha segnalate Claude. Spariscono da sole dopo sette giorni.</p>
+          </div>
+          <button class="ghost-round" aria-label="Chiudi" @click="showMailbox = false"><X :size="18" /></button>
+        </div>
+        <div v-if="mailbox.length" class="list">
+          <div v-for="mail in mailbox" :key="mail.id" class="row">
+            <span class="row-icon tone-sky"><Mail :size="18" /></span>
+            <span class="row-body">
+              <span class="type-label label-sky">{{ mail.mittente }}</span>
+              <span class="row-title">{{ mail.oggetto }}</span>
+              <span class="row-meta">{{ mail.motivo }}</span>
+              <span v-if="mailMeta(mail)" class="row-meta">{{ mailMeta(mail) }}</span>
+              <span class="mail-actions">
+                <a v-if="mail.link" class="btn-ghost" :href="mail.link" target="_blank" rel="noopener noreferrer"><ExternalLink :size="14" /> Apri nella posta</a>
+                <button class="btn-ghost" @click="mailToTask(mail)"><ListTodo :size="14" /> Fanne un’attività</button>
+                <button class="btn-ghost" @click="archiveMail(mail.id)"><Archive :size="14" /> Archivia</button>
+              </span>
+            </span>
+          </div>
+        </div>
+        <div v-else class="empty"><strong>Casella vuota</strong><p>Quando chiedi a Claude di guardare la posta, le email importanti arrivano qui.</p></div>
+        <div class="sheet-actions">
+          <button class="btn btn-soft" :disabled="!mailbox.length" @click="archiveAllMails">Archivia tutte</button>
+          <button class="btn" @click="showMailbox = false"><Check :size="16" /> Chiudi</button>
+        </div>
+      </section>
+    </div>
+
     <!-- anteprima: cattura veloce e proposte di Claude -->
     <div v-if="pending.length" class="backdrop" @click.self="dismissPending">
       <section class="sheet">
         <div class="sheet-grip"></div>
         <div class="sheet-head">
           <div>
-            <h2>{{ pendingSource.length ? 'Claude propone' : 'Sto per inserire' }}</h2>
+            <h2>{{ pendingSource.length ? 'Claude propone' : pendingMail ? 'Dall’email' : 'Sto per inserire' }}</h2>
             <p>Togli quello che non ti serve, poi conferma.</p>
           </div>
           <button class="ghost-round" aria-label="Chiudi" @click="dismissPending"><X :size="18" /></button>
