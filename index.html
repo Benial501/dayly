@@ -23,52 +23,103 @@
         flex-direction: column;
         align-items: center;
         justify-content: center;
-        gap: 22px;
-        transition: opacity .45s ease, transform .45s ease;
+        overflow: hidden;
+        transition: opacity .55s ease, transform .55s cubic-bezier(.3, 0, .2, 1);
       }
-      #splash.is-gone { opacity: 0; transform: scale(1.04); pointer-events: none; }
+      /* l'alone viola che si accende dietro al calendario */
+      #splash::before {
+        content: '';
+        position: absolute;
+        left: 50%; top: 48%;
+        width: 150vmax; height: 150vmax;
+        margin: -75vmax 0 0 -75vmax;
+        background: radial-gradient(circle, rgba(107, 92, 231, .20) 0%, rgba(107, 92, 231, .07) 32%, rgba(107, 92, 231, 0) 62%);
+        opacity: 0;
+        transform: scale(.35);
+        animation: cal-bloom 1.5s cubic-bezier(.2, .7, .2, 1) .1s forwards;
+      }
+      #splash.is-gone { opacity: 0; }
+      /* uscita: tutto ci "entra dentro", come se si aprisse l'app */
+      #splash .dy-lock {
+        position: relative;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 30px;
+        transition: transform .55s cubic-bezier(.3, 0, .2, 1);
+      }
+      #splash.is-gone .dy-lock { transform: scale(1.3); }
 
-      #splash .cal { width: 132px; height: 132px; overflow: visible; }
-      #splash .cal * { transform-box: fill-box; transform-origin: center; }
+      /* il respiro: parte quando il disegno è finito e tiene la scena viva */
+      #splash .dy-breathe {
+        /* l'ombra sta qui, sul contenitore: su un singolo nodo SVG Chrome
+           la disegna fuori posto */
+        filter: drop-shadow(0 18px 26px rgba(43, 37, 110, .17));
+        animation: cal-breathe 3.4s ease-in-out 2.3s infinite;
+      }
 
-      /* il foglio si disegna */
-      #splash .sheet {
+      #splash .dy-cal {
+        display: block;
+        width: min(64vw, 236px);
+        height: auto;
+        overflow: visible;
+        transform-origin: center center;
+        opacity: 0;
+        transform: perspective(620px) rotateX(-26deg) translateY(-30px) scale(.78);
+        animation: cal-land 1.05s cubic-bezier(.16, .84, .24, 1) .05s forwards;
+      }
+      #splash .dy-cal * { transform-box: fill-box; transform-origin: center; }
+
+      /* il foglio si disegna, e subito dopo prende corpo */
+      #splash .dy-sheet {
         fill: none;
         stroke: #15151F;
         stroke-width: 3.2;
         stroke-dasharray: 420;
         stroke-dashoffset: 420;
-        animation: cal-draw .8s cubic-bezier(.4, .1, .2, 1) .1s forwards;
+        animation: cal-draw .85s cubic-bezier(.4, .1, .2, 1) .15s forwards;
       }
-      /* i due anelli scendono a incastrarsi */
-      #splash .ring {
+      #splash .dy-sheet-fill {
+        fill: #fff;
+        opacity: 0;
+        animation: cal-fill .6s ease .75s forwards;
+      }
+      /* i due anelli cadono e rimbalzano a incastrarsi */
+      #splash .dy-ring {
         stroke: #15151F;
         stroke-width: 3.2;
         stroke-linecap: round;
         opacity: 0;
-        animation: cal-ring .4s cubic-bezier(.2, .9, .3, 1.4) .55s forwards;
+        animation: cal-ring .62s cubic-bezier(.3, 1.4, .5, 1) .5s forwards;
       }
-      #splash .ring.b { animation-delay: 0.663s; }
-      #splash .divider {
+      #splash .dy-ring.dy-ring-b { animation-delay: .61s; }
+      #splash .dy-divider {
         stroke: #DEDEEE;
         stroke-width: 2.4;
-        stroke-dasharray: 96;
-        stroke-dashoffset: 96;
-        animation: cal-draw .45s ease .8s forwards;
+        stroke-dasharray: 82;
+        stroke-dashoffset: 82;
+        animation: cal-draw .45s ease .9s forwards;
       }
-      /* i giorni compaiono uno dopo l'altro */
-      #splash .day {
+      /* i giorni compaiono uno dopo l'altro, in diagonale */
+      #splash .dy-day {
         fill: #DEDEEE;
         opacity: 0;
-        animation: cal-day .36s cubic-bezier(.2, .9, .3, 1.5) forwards;
+        animation: cal-day .42s cubic-bezier(.2, .9, .3, 1.5) forwards;
       }
-      /* la pillola del giorno scelto, e la spunta che ci si disegna sopra */
-      #splash .pill {
+      /* la pillola del giorno scelto, con l'onda che si allarga, e la spunta */
+      #splash .dy-halo {
+        fill: none;
+        stroke: #6B5CE7;
+        stroke-width: 2.4;
+        opacity: 0;
+        animation: cal-halo 1.1s cubic-bezier(.2, .7, .2, 1) 1.66s forwards;
+      }
+      #splash .dy-pill {
         fill: #6B5CE7;
         opacity: 0;
-        animation: cal-pill .45s cubic-bezier(.2, .9, .3, 1.5) 1.62s forwards;
+        animation: cal-pill .62s cubic-bezier(.3, 1.5, .45, 1) 1.62s forwards;
       }
-      #splash .tick {
+      #splash .dy-tick {
         fill: none;
         stroke: #fff;
         stroke-width: 3;
@@ -76,74 +127,133 @@
         stroke-linejoin: round;
         stroke-dasharray: 22;
         stroke-dashoffset: 22;
-        animation: cal-draw .4s ease 1.92s forwards;
+        animation: cal-draw .4s ease 1.98s forwards;
+      }
+      /* il riflesso che passa sul foglio, come su una superficie lucida */
+      #splash .dy-shine {
+        fill: url(#dayly-shine);
+        animation: cal-shine 1.1s cubic-bezier(.4, 0, .3, 1) 2.05s forwards;
       }
 
-      #splash .word {
+      #splash .dy-word {
         font-family: Manrope, -apple-system, BlinkMacSystemFont, sans-serif;
-        font-size: 25px;
+        font-size: clamp(27px, 9vw, 38px);
         font-weight: 800;
-        letter-spacing: -1.1px;
+        letter-spacing: 5px;
         color: #15151F;
         opacity: 0;
-        animation: cal-word .5s ease 1.95s forwards;
+        animation: cal-word .8s cubic-bezier(.2, .8, .25, 1) 2.02s forwards;
       }
-      #splash .word span { color: #6B5CE7; }
+      #splash .dy-word span { color: #6B5CE7; }
 
       @keyframes cal-draw { to { stroke-dashoffset: 0; } }
+      @keyframes cal-bloom {
+        from { opacity: 0; transform: scale(.35); }
+        to { opacity: 1; transform: scale(1); }
+      }
+      @keyframes cal-land {
+        0%   { opacity: 0; transform: perspective(620px) rotateX(-26deg) translateY(-30px) scale(.78); }
+        55%  { opacity: 1; transform: perspective(620px) rotateX(4deg) translateY(6px) scale(1.05); }
+        78%  { transform: perspective(620px) rotateX(-1.5deg) translateY(-2px) scale(.985); }
+        100% { opacity: 1; transform: perspective(620px) rotateX(0deg) translateY(0) scale(1); }
+      }
       @keyframes cal-ring {
-        from { opacity: 0; transform: translateY(-7px); }
-        to { opacity: 1; transform: none; }
+        0%   { opacity: 0; transform: translateY(-14px) scaleY(1.25); }
+        45%  { opacity: 1; transform: translateY(2px) scaleY(.82); }
+        72%  { transform: translateY(-1.5px) scaleY(1.06); }
+        100% { opacity: 1; transform: none; }
+      }
+      @keyframes cal-fill {
+        from { opacity: 0; }
+        to { opacity: 1; }
       }
       @keyframes cal-day {
-        from { opacity: 0; transform: scale(.2); }
+        from { opacity: 0; transform: scale(.2) translateY(-3px); }
         to { opacity: 1; transform: none; }
       }
       @keyframes cal-pill {
-        from { opacity: 0; transform: scale(.4); }
-        to { opacity: 1; transform: none; }
+        0%   { opacity: 0; transform: scale(.35); }
+        60%  { opacity: 1; transform: scale(1.12); }
+        100% { opacity: 1; transform: scale(1); }
+      }
+      @keyframes cal-halo {
+        from { opacity: .55; transform: scale(.5); }
+        to { opacity: 0; transform: scale(2.4); }
+      }
+      @keyframes cal-shine {
+        from { transform: translateX(0); }
+        to { transform: translateX(210px); }
       }
       @keyframes cal-word {
-        from { opacity: 0; transform: translateY(8px); }
-        to { opacity: 1; transform: none; }
+        from { opacity: 0; transform: translateY(14px) scale(.94); letter-spacing: 5px; }
+        to { opacity: 1; transform: none; letter-spacing: -1.4px; }
+      }
+      @keyframes cal-breathe {
+        0%, 100% { transform: translateY(0) scale(1); }
+        50% { transform: translateY(-7px) scale(1.016); }
       }
       @media (prefers-reduced-motion: reduce) {
-        #splash .sheet, #splash .ring, #splash .divider,
-        #splash .day, #splash .pill, #splash .tick, #splash .word {
+        #splash::before, #splash .dy-breathe, #splash .dy-cal,
+        #splash .dy-sheet, #splash .dy-sheet-fill, #splash .dy-ring, #splash .dy-divider,
+        #splash .dy-day, #splash .dy-halo, #splash .dy-pill, #splash .dy-tick,
+        #splash .dy-shine, #splash .dy-word {
           animation-duration: .01ms;
           animation-delay: 0ms;
+          animation-iteration-count: 1;
           opacity: 1;
+          transform: none;
           stroke-dashoffset: 0;
         }
+        #splash .dy-halo { opacity: 0; }
+        #splash .dy-word { letter-spacing: -1.4px; }
       }
     </style>
   </head>
   <body>
     <div id="app"></div>
     <div id="splash">
-      <svg class="cal" viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-        <line class="ring" x1="42" y1="14" x2="42" y2="30" />
-        <line class="ring b" x1="78" y1="14" x2="78" y2="30" />
-        <rect class="sheet" x="12" y="22" width="96" height="86" rx="16" />
-        <line class="divider" x1="12" y1="46" x2="108" y2="46" />
-        <rect class="day" x="22.5" y="58.5" width="7" height="7" rx="2.4" style="animation-delay: 0.900s" />
-        <rect class="day" x="40.5" y="58.5" width="7" height="7" rx="2.4" style="animation-delay: 0.945s" />
-        <rect class="day" x="58.5" y="58.5" width="7" height="7" rx="2.4" style="animation-delay: 0.990s" />
-        <rect class="day" x="76.5" y="58.5" width="7" height="7" rx="2.4" style="animation-delay: 1.035s" />
-        <rect class="day" x="94.5" y="58.5" width="7" height="7" rx="2.4" style="animation-delay: 1.080s" />
-        <rect class="day" x="22.5" y="74.5" width="7" height="7" rx="2.4" style="animation-delay: 1.125s" />
-        <rect class="day" x="40.5" y="74.5" width="7" height="7" rx="2.4" style="animation-delay: 1.170s" />
-        <rect class="day" x="76.5" y="74.5" width="7" height="7" rx="2.4" style="animation-delay: 1.260s" />
-        <rect class="day" x="94.5" y="74.5" width="7" height="7" rx="2.4" style="animation-delay: 1.305s" />
-        <rect class="day" x="22.5" y="90.5" width="7" height="7" rx="2.4" style="animation-delay: 1.350s" />
-        <rect class="day" x="40.5" y="90.5" width="7" height="7" rx="2.4" style="animation-delay: 1.395s" />
-        <rect class="day" x="58.5" y="90.5" width="7" height="7" rx="2.4" style="animation-delay: 1.440s" />
-        <rect class="day" x="76.5" y="90.5" width="7" height="7" rx="2.4" style="animation-delay: 1.485s" />
-        <rect class="day" x="94.5" y="90.5" width="7" height="7" rx="2.4" style="animation-delay: 1.530s" />
-        <rect class="pill" x="51" y="69" width="22" height="18" rx="9" />
-        <path class="tick" d="M57 78 l3.6 3.8 l6.6 -7.6" />
-      </svg>
-      <div class="word">dayly<span>.</span></div>
+      <div class="dy-lock">
+        <div class="dy-breathe">
+          <svg class="dy-cal" viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <defs>
+              <linearGradient id="dayly-shine" x1="0" y1="0" x2="1" y2="0">
+                <stop offset="0" stop-color="#6B5CE7" stop-opacity="0" />
+                <stop offset=".5" stop-color="#6B5CE7" stop-opacity=".18" />
+                <stop offset="1" stop-color="#6B5CE7" stop-opacity="0" />
+              </linearGradient>
+              <clipPath id="dayly-sheet-clip">
+                <rect x="12" y="22" width="96" height="86" rx="16" />
+              </clipPath>
+            </defs>
+            <line class="dy-ring" x1="42" y1="14" x2="42" y2="30" />
+            <line class="dy-ring dy-ring-b" x1="78" y1="14" x2="78" y2="30" />
+            <rect class="dy-sheet-fill" x="12" y="22" width="96" height="86" rx="16" />
+            <rect class="dy-sheet" x="12" y="22" width="96" height="86" rx="16" />
+            <line class="dy-divider" x1="19" y1="46" x2="101" y2="46" />
+            <rect class="dy-day" x="22.5" y="58.5" width="7" height="7" rx="2.4" style="animation-delay: 0.980s" />
+            <rect class="dy-day" x="40.5" y="58.5" width="7" height="7" rx="2.4" style="animation-delay: 1.025s" />
+            <rect class="dy-day" x="58.5" y="58.5" width="7" height="7" rx="2.4" style="animation-delay: 1.070s" />
+            <rect class="dy-day" x="76.5" y="58.5" width="7" height="7" rx="2.4" style="animation-delay: 1.115s" />
+            <rect class="dy-day" x="94.5" y="58.5" width="7" height="7" rx="2.4" style="animation-delay: 1.160s" />
+            <rect class="dy-day" x="22.5" y="74.5" width="7" height="7" rx="2.4" style="animation-delay: 1.205s" />
+            <rect class="dy-day" x="40.5" y="74.5" width="7" height="7" rx="2.4" style="animation-delay: 1.250s" />
+            <rect class="dy-day" x="76.5" y="74.5" width="7" height="7" rx="2.4" style="animation-delay: 1.340s" />
+            <rect class="dy-day" x="94.5" y="74.5" width="7" height="7" rx="2.4" style="animation-delay: 1.385s" />
+            <rect class="dy-day" x="22.5" y="90.5" width="7" height="7" rx="2.4" style="animation-delay: 1.430s" />
+            <rect class="dy-day" x="40.5" y="90.5" width="7" height="7" rx="2.4" style="animation-delay: 1.475s" />
+            <rect class="dy-day" x="58.5" y="90.5" width="7" height="7" rx="2.4" style="animation-delay: 1.520s" />
+            <rect class="dy-day" x="76.5" y="90.5" width="7" height="7" rx="2.4" style="animation-delay: 1.565s" />
+            <rect class="dy-day" x="94.5" y="90.5" width="7" height="7" rx="2.4" style="animation-delay: 1.610s" />
+            <circle class="dy-halo" cx="62" cy="78" r="13" />
+            <rect class="dy-pill" x="51" y="69" width="22" height="18" rx="9" />
+            <path class="dy-tick" d="M57 78 l3.6 3.8 l6.6 -7.6" />
+            <g clip-path="url(#dayly-sheet-clip)">
+              <rect class="dy-shine" x="-56" y="22" width="52" height="86" />
+            </g>
+          </svg>
+        </div>
+        <div class="dy-word">dayly<span>.</span></div>
+      </div>
     </div>
     <script type="module" src="/src/main.js"></script>
   </body>
