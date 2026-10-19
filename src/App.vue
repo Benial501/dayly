@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { Archive, ArrowDownToLine, ArrowLeft, Compass, NotebookPen, ArrowRight, ExternalLink, Mail, PenLine, RefreshCw, Sparkles, CalendarDays, Check, CheckCircle2, ChevronRight, Clock3, CloudOff, Flag, Lightbulb, ListTodo, MessageCircle, Moon, Plus, Settings2, Sun, Target, Trash2, Upload, X } from 'lucide-vue-next'
 import { readAll, put, remove, replaceAll } from './db'
 import { sound } from './sound'
@@ -52,6 +52,7 @@ onMounted(async () => {
   }, { capture: true, passive: true })
 
   await loadInitialState()
+  watchMailbox()
   loading.value = false
   const splash = document.getElementById('splash')
   if (splash) {
@@ -548,22 +549,52 @@ async function dismissPending() {
   if (sources.length) { await clearProposals(sources); ping('Proposte rifiutate', 'removed') }
 }
 
-/* ── email importanti segnalate da Claude ── */
+/* ── riassunti delle email importanti segnalate da Claude ── */
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000
+const MAIL_IN_VIEW = 20
+const MAIL_ARCHIVED = 100
+const MAIL_POLL_MS = 30_000
 const mailbox = ref([])
 const mailboxRevision = ref(null)
 const mailboxBusy = ref(false)
 const showMailbox = ref(false)
+const showArchive = ref(false)
+const confirmArchiveWipe = ref(false)
 const pendingMail = ref('')
+let mailPoll = null
 
-const mailCount = computed(() => mailbox.value.length)
-const mailNote = computed(() => [...new Set(mailbox.value.map(mail => mail.nota).filter(Boolean))].join(' '))
+const mailLive = computed(() => mailbox.value.filter(mail => mail.stato !== 'archiviata'))
+const mailArchived = computed(() => mailbox.value.filter(mail => mail.stato === 'archiviata'))
+const mailCount = computed(() => mailLive.value.length)
+const archiveCount = computed(() => mailArchived.value.length)
+const mailNote = computed(() => [...new Set(mailLive.value.map(mail => mail.nota).filter(Boolean))].join(' '))
+
+function mailDay(mail) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(mail.ricevuta || '') ? mail.ricevuta : keyDate(new Date(Number(mail.createdAt) || Date.now()))
+}
 
 function mailMeta(mail) {
   const parts = []
-  if (/^\d{4}-\d{2}-\d{2}$/.test(mail.ricevuta || '')) parts.push(mail.ricevuta === todayKey ? 'arrivata oggi' : `arrivata il ${longDate(new Date(`${mail.ricevuta}T12:00:00`))}`)
-  if (/^\d{4}-\d{2}-\d{2}$/.test(mail.scadenza || '')) parts.push(mail.scadenza === todayKey ? 'da gestire oggi' : `entro il ${longDate(new Date(`${mail.scadenza}T12:00:00`))}`)
+  const day = mailDay(mail)
+  parts.push(day === todayKey ? 'arrivata oggi' : `arrivata ${longDate(new Date(`${day}T12:00:00`))}`)
+  if (/^\d{4}-\d{2}-\d{2}$/.test(mail.scadenza || '')) parts.push(mail.scadenza === todayKey ? 'da gestire oggi' : `entro ${longDate(new Date(`${mail.scadenza}T12:00:00`))}`)
   return parts.join(' · ')
+}
+
+const byNewest = (a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0)
+
+// a ogni lettura i riassunti dei giorni passati scalano in archivio da soli:
+// in vista resta la giornata di oggi, l'archivio lo svuoti tu quando vuoi
+function tidyMailbox(list) {
+  const now = Date.now()
+  return list
+    .filter(mail => mail.stato === 'archiviata' || now - Number(mail.createdAt || 0) < WEEK_MS)
+    .map(mail => {
+      if (mail.stato === 'archiviata') return mail
+      if (mailDay(mail) < todayKey) return { ...mail, stato: 'archiviata', archivedAt: now }
+      return mail.stato === 'nuova' ? mail : { ...mail, stato: 'nuova' }
+    })
+    .sort(byNewest)
 }
 
 async function fetchMailbox(showError = false) {
@@ -572,14 +603,16 @@ async function fetchMailbox(showError = false) {
   mailboxBusy.value = true
   try {
     const response = await fetch(`/api/mailbox?accountId=${encodeURIComponent(account.accountId)}`, { headers: { Authorization: `Bearer ${account.credential}` } })
-    if (!response.ok) throw new Error('Non riesco a leggere le email segnalate.')
+    if (!response.ok) throw new Error('Non riesco a leggere i riassunti delle email.')
     const remote = await response.json()
     mailboxRevision.value = remote.revision || null
-    const now = Date.now()
     const list = remote.casella ? await decryptSnapshot(remote.casella, account.credential) : []
-    mailbox.value = (Array.isArray(list) ? list : [])
-      .filter(mail => now - Number(mail.createdAt || 0) < WEEK_MS)
-      .sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0))
+    const stored = (Array.isArray(list) ? list : []).slice().sort(byNewest)
+    const tidy = tidyMailbox(stored)
+    mailbox.value = tidy
+    mailboxBusy.value = false
+    // l'archiviazione automatica va rimandata su, altrimenti domani ricompare
+    if (JSON.stringify(tidy) !== JSON.stringify(stored)) await saveMailbox(tidy)
   } catch (error) {
     if (showError) ping(error.message)
   } finally {
@@ -590,8 +623,13 @@ async function fetchMailbox(showError = false) {
 async function saveMailbox(list) {
   const account = cloudSettings()
   if (!account) return false
+  const sorted = list.slice().sort(byNewest)
+  const trimmed = [
+    ...sorted.filter(mail => mail.stato !== 'archiviata').slice(0, MAIL_IN_VIEW),
+    ...sorted.filter(mail => mail.stato === 'archiviata').slice(0, MAIL_ARCHIVED),
+  ].sort(byNewest)
   try {
-    const casella = list.length ? await encryptSnapshot(list, account.credential) : null
+    const casella = trimmed.length ? await encryptSnapshot(trimmed, account.credential) : null
     const response = await fetch('/api/mailbox', {
       method: 'PUT',
       headers: { Authorization: `Bearer ${account.credential}`, 'Content-Type': 'application/json' },
@@ -601,27 +639,56 @@ async function saveMailbox(list) {
     if (response.status === 409) { await fetchMailbox(); ping('Claude ha segnalato altre email: ricontrolla la casella'); return false }
     if (!response.ok) throw new Error(result.error || 'Non riesco ad aggiornare la casella.')
     mailboxRevision.value = result.revision || null
-    mailbox.value = list
+    mailbox.value = trimmed
     return true
   } catch (error) { ping(error.message); return false }
 }
 
 async function removeMail(id) {
-  const remaining = mailbox.value.filter(mail => mail.id !== id)
-  const saved = await saveMailbox(remaining)
-  if (saved && !remaining.length) showMailbox.value = false
-  return saved
+  const now = Date.now()
+  return saveMailbox(mailbox.value.map(mail => mail.id === id ? { ...mail, stato: 'archiviata', archivedAt: now } : mail))
 }
 
 async function archiveMail(id) {
-  if (await removeMail(id)) ping('Email archiviata', 'removed')
+  if (!await removeMail(id)) return
+  ping('Email archiviata', 'removed')
+  if (!mailCount.value && !showArchive.value) showMailbox.value = false
 }
 
 async function archiveAllMails() {
-  if (await saveMailbox([])) { showMailbox.value = false; ping('Casella svuotata', 'removed') }
+  const now = Date.now()
+  const archived = mailbox.value.map(mail => mail.stato === 'archiviata' ? mail : { ...mail, stato: 'archiviata', archivedAt: now })
+  if (await saveMailbox(archived)) { showMailbox.value = false; showArchive.value = false; ping('Riassunti archiviati', 'removed') }
 }
 
-function openMailbox() { showMailbox.value = true }
+async function deleteArchive() {
+  if (!confirmArchiveWipe.value) { confirmArchiveWipe.value = true; return }
+  confirmArchiveWipe.value = false
+  const remaining = mailbox.value.filter(mail => mail.stato !== 'archiviata')
+  if (!await saveMailbox(remaining)) return
+  showArchive.value = false
+  if (!remaining.length) showMailbox.value = false
+  ping('Archivio eliminato', 'removed')
+}
+
+function openMailbox(archive = false) {
+  showArchive.value = archive || !mailCount.value
+  confirmArchiveWipe.value = false
+  showMailbox.value = true
+  fetchMailbox()
+}
+
+function openArchive(open) { showArchive.value = open; confirmArchiveWipe.value = false }
+
+// le email compaiono quando Claude le deposita: ricontrollo da solo mentre
+// DAYLY è davanti agli occhi, così non devo riaprirla per vederle
+function watchMailbox() {
+  mailPoll = window.setInterval(() => { if (document.visibilityState === 'visible') fetchMailbox() }, MAIL_POLL_MS)
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') { fetchProposals(); fetchMailbox() }
+  })
+}
+onUnmounted(() => { if (mailPoll) window.clearInterval(mailPoll) })
 
 function mailToTask(mail) {
   pendingMail.value = mail.id
@@ -781,13 +848,13 @@ function openCapture() {
             <button class="btn btn-block" style="margin-top:14px" @click="openClaudeProposals">Guarda cosa propone</button>
           </section>
 
-          <section v-if="mailCount" class="card">
+          <section v-if="mailCount || archiveCount" class="card">
             <div class="card-head">
-              <h2>Email da non perdere<span class="head-sub">{{ mailCount }} {{ mailCount === 1 ? 'segnalazione' : 'segnalazioni' }} di Claude</span></h2>
+              <h2>{{ mailCount ? 'Email di oggi' : 'Email archiviate' }}<span class="head-sub">{{ mailCount ? `${mailCount} ${mailCount === 1 ? 'riassunto' : 'riassunti'} di Claude` : `${archiveCount} nell’archivio` }}</span></h2>
               <span class="row-icon tone-sky"><Mail :size="18" /></span>
             </div>
-            <p v-if="mailNote" class="project-note">{{ mailNote }}</p>
-            <button class="btn btn-block" style="margin-top:14px" @click="openMailbox">Guarda quali email</button>
+            <p v-if="mailCount && mailNote" class="project-note">{{ mailNote }}</p>
+            <button class="btn btn-block" style="margin-top:14px" @click="openMailbox(!mailCount)">{{ mailCount ? 'Leggi i riassunti' : 'Apri l’archivio' }}</button>
           </section>
 
           <section class="card">
@@ -1084,7 +1151,7 @@ function openCapture() {
             <div class="note-line"><Check :size="16" /><span>Aggiungere un’attività o spostarla a un altro giorno.</span></div>
             <div class="note-line"><Check :size="16" /><span>Segnare un’attività come completata.</span></div>
             <div class="note-line"><Check :size="16" /><span>Aggiornare la percentuale di un progetto.</span></div>
-            <div class="note-line"><Check :size="16" /><span>Segnalarti le email importanti: le vedi qui, le apri nella posta o le trasformi in attività.</span></div>
+            <div class="note-line"><Check :size="16" /><span>Riassumerti le email importanti: leggi cosa dicono, apri quella vera in Gmail o la trasformi in attività.</span></div>
           </section>
 
           <section class="card">
@@ -1162,36 +1229,52 @@ function openCapture() {
       </section>
     </div>
 
-    <!-- email importanti segnalate da Claude -->
+    <!-- riassunti delle email importanti segnalate da Claude -->
     <div v-if="showMailbox" class="backdrop" @click.self="showMailbox = false">
       <section class="sheet">
         <div class="sheet-grip"></div>
         <div class="sheet-head">
           <div>
-            <h2>Email da non perdere</h2>
-            <p>Le ha segnalate Claude. Spariscono da sole dopo sette giorni.</p>
+            <h2>{{ showArchive ? 'Archivio email' : 'Email di oggi' }}</h2>
+            <p>{{ showArchive ? 'Le email già passate. Se elimini l’archivio non le rivedi più da qui.' : 'Cosa dicono le email che Claude ti segnala. A fine giornata finiscono in archivio da sole.' }}</p>
           </div>
           <button class="ghost-round" aria-label="Chiudi" @click="showMailbox = false"><X :size="18" /></button>
         </div>
-        <div v-if="mailbox.length" class="list">
-          <div v-for="mail in mailbox" :key="mail.id" class="row">
+        <div v-if="!showArchive && mailLive.length" class="list">
+          <div v-for="mail in mailLive" :key="mail.id" class="row">
             <span class="row-icon tone-sky"><Mail :size="18" /></span>
             <span class="row-body">
-              <span class="type-label label-sky">{{ mail.mittente }}</span>
-              <span class="row-title">{{ mail.oggetto }}</span>
-              <span class="row-meta">{{ mail.motivo }}</span>
-              <span v-if="mailMeta(mail)" class="row-meta">{{ mailMeta(mail) }}</span>
+              <span class="mail-summary">{{ mail.riassunto || mail.motivo }}</span>
+              <span v-if="mail.riassunto && mail.motivo" class="row-meta">{{ mail.motivo }}</span>
+              <span class="row-meta">{{ mailMeta(mail) }}</span>
               <span class="mail-actions">
-                <a v-if="mail.link" class="btn-ghost" :href="mail.link" target="_blank" rel="noopener noreferrer"><ExternalLink :size="14" /> Apri nella posta</a>
+                <a v-if="mail.link" class="btn-ghost" :href="mail.link" target="_blank" rel="noopener noreferrer"><ExternalLink :size="14" /> Vedi email</a>
                 <button class="btn-ghost" @click="mailToTask(mail)"><ListTodo :size="14" /> Fanne un’attività</button>
                 <button class="btn-ghost" @click="archiveMail(mail.id)"><Archive :size="14" /> Archivia</button>
               </span>
             </span>
           </div>
         </div>
-        <div v-else class="empty"><strong>Casella vuota</strong><p>Quando chiedi a Claude di guardare la posta, le email importanti arrivano qui.</p></div>
+        <div v-else-if="!showArchive" class="empty"><strong>Niente di nuovo oggi</strong><p>Quando chiedi a Claude di guardare la posta, qui trovi il riassunto di cosa dicono le email.</p></div>
+        <div v-else-if="mailArchived.length" class="list">
+          <div v-for="mail in mailArchived" :key="mail.id" class="row">
+            <span class="row-icon tone-sky"><Archive :size="18" /></span>
+            <span class="row-body">
+              <span class="row-title">{{ mail.riassunto || mail.motivo }}</span>
+              <span class="row-meta">{{ mailMeta(mail) }}</span>
+              <span class="mail-actions">
+                <a v-if="mail.link" class="btn-ghost" :href="mail.link" target="_blank" rel="noopener noreferrer"><ExternalLink :size="14" /> Vedi email</a>
+              </span>
+            </span>
+          </div>
+        </div>
+        <div v-else class="empty"><strong>Archivio vuoto</strong><p>Qui finiscono i riassunti delle giornate passate e quelli che archivi tu.</p></div>
+        <p v-if="confirmArchiveWipe" class="project-note">Elimino {{ archiveCount }} {{ archiveCount === 1 ? 'email archiviata' : 'email archiviate' }}: da DAYLY non le rivedi più. Tocca di nuovo per confermare.</p>
         <div class="sheet-actions">
-          <button class="btn btn-soft" :disabled="!mailbox.length" @click="archiveAllMails">Archivia tutte</button>
+          <button v-if="!showArchive" class="btn btn-soft" :disabled="!mailLive.length" @click="archiveAllMails">Archivia tutte</button>
+          <button v-else class="btn btn-soft" :disabled="!mailArchived.length" @click="deleteArchive"><Trash2 :size="16" /> {{ confirmArchiveWipe ? 'Confermo' : 'Elimina archivio' }}</button>
+          <button v-if="!showArchive" class="btn btn-soft" @click="openArchive(true)"><Archive :size="16" /> Archivio{{ archiveCount ? ` (${archiveCount})` : '' }}</button>
+          <button v-else class="btn btn-soft" @click="openArchive(false)"><ArrowLeft :size="16" /> Email di oggi</button>
           <button class="btn" @click="showMailbox = false"><Check :size="16" /> Chiudi</button>
         </div>
       </section>

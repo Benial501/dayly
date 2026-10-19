@@ -3,6 +3,8 @@ import { accountHash, bearer, credentialHash, verifyToken } from '../lib/securit
 import { readPrivateJson, writePrivateJson } from '../lib/blob-store.js'
 
 const WEEK = 7 * 24 * 60 * 60 * 1000
+const MAIL_IN_VIEW = 20
+const MAIL_ARCHIVED = 100
 const text = (value) => ({ content: [{ type: 'text', text: typeof value === 'string' ? value : JSON.stringify(value, null, 2) }] })
 const fail = (response, status, body) => { response.statusCode = status; response.setHeader('Content-Type', 'application/json'); return response.end(JSON.stringify(body)) }
 function decryptSnapshot(envelope, key) {
@@ -56,7 +58,7 @@ function success(id, result) { return { jsonrpc: '2.0', id, result } }
 const tools = [
   { name: 'dayly_leggi_dati', description: 'Legge attività, progetti, idee e riepiloghi salvati dall’utente in DAYLY. Usa questi dati solo per la richiesta corrente.', inputSchema: { type: 'object', properties: { periodo: { type: 'string', enum: ['oggi', 'settimana', 'tutti'], description: 'Seleziona quali attività includere.' } } } },
   { name: 'dayly_proponi_modifiche', description: 'Invia a DAYLY una lista di modifiche proposte. Non cambia i dati: l’utente le trova nell’app come schede da accettare o rifiutare una per una. Usa questo strumento quando l’utente ti chiede di organizzargli qualcosa, poi digli che le proposte lo aspettano in DAYLY.', inputSchema: { type: 'object', properties: { nota: { type: 'string', description: 'Una frase che spiega all’utente cosa hai proposto e perché.' }, modifiche: { type: 'array', items: { type: 'object', properties: { tipo: { type: 'string', enum: ['aggiungi_attivita','sposta_attivita','aggiorna_progresso','completa_attivita'] }, titolo: { type: 'string' }, data: { type: 'string' }, ora: { type: 'string' }, priorita: { type: 'boolean' }, progetto: { type: 'string' }, progresso: { type: 'number' } }, required: ['tipo'] } } }, required: ['modifiche'] } },
-  { name: 'dayly_segnala_email', description: 'Deposita in DAYLY le email importanti che l’utente deve vedere. L’app le mostra come schede con mittente, oggetto e motivo: da lì l’utente le apre nella posta o le trasforma in attività. Non modifica i dati DAYLY. Passa solo mittente, oggetto e il motivo per cui conta, mai il testo del messaggio. Dopo averlo usato, di’ all’utente che le email lo aspettano in DAYLY invece di rielencarle in chat.', inputSchema: { type: 'object', properties: { nota: { type: 'string', description: 'Una frase che spiega all’utente perché ha senso guardare queste email adesso.' }, email: { type: 'array', description: 'Da una a dieci email, dalla più importante.', items: { type: 'object', properties: { mittente: { type: 'string', description: 'Chi scrive: nome o indirizzo.' }, oggetto: { type: 'string', description: 'L’oggetto del messaggio.' }, motivo: { type: 'string', description: 'Perché è importante, in una frase.' }, ricevuta: { type: 'string', description: 'Giorno in cui è arrivata, in formato AAAA-MM-GG.' }, scadenza: { type: 'string', description: 'Entro quando va gestita, in formato AAAA-MM-GG, se il messaggio lo dice.' }, link: { type: 'string', description: 'Link https per aprire il messaggio nella posta.' } }, required: ['mittente','oggetto','motivo'] } } }, required: ['email'] } },
+  { name: 'dayly_segnala_email', description: 'Deposita in DAYLY il riassunto delle email importanti che l’utente deve vedere. L’app non mostra il messaggio originale né il suo oggetto: mostra il tuo riassunto, cioè cosa dice l’email in una o due frasi. Da lì l’utente apre l’email vera in Gmail, la trasforma in attività o la archivia. Non modifica i dati DAYLY. Riassumi con parole tue: non incollare il testo integrale del messaggio. Dopo averlo usato, di’ all’utente che i riassunti lo aspettano in DAYLY invece di rielencarli in chat.', inputSchema: { type: 'object', properties: { nota: { type: 'string', description: 'Una frase che spiega all’utente perché ha senso guardare queste email adesso.' }, email: { type: 'array', description: 'Da una a venti email, dalla più importante.', items: { type: 'object', properties: { riassunto: { type: 'string', description: 'Cosa dice l’email, in una o due frasi con parole tue. È l’unica cosa che l’utente legge nell’app: scrivila in modo autosufficiente, dicendo chi scrive e cosa chiede.' }, mittente: { type: 'string', description: 'Chi scrive: nome o indirizzo. Serve a riconoscere i doppioni, non viene mostrato.' }, oggetto: { type: 'string', description: 'L’oggetto del messaggio. Serve a riconoscere i doppioni e a dare un titolo all’attività, non viene mostrato.' }, motivo: { type: 'string', description: 'Perché è importante, in una frase, se aggiunge qualcosa al riassunto.' }, ricevuta: { type: 'string', description: 'Giorno in cui è arrivata, in formato AAAA-MM-GG. DAYLY tiene in vista le email di oggi e archivia da sola quelle dei giorni passati.' }, scadenza: { type: 'string', description: 'Entro quando va gestita, in formato AAAA-MM-GG, se il messaggio lo dice.' }, link: { type: 'string', description: 'Link https al messaggio in Gmail (per esempio https://mail.google.com/mail/u/0/#inbox/<id>), così il tocco apre l’app Gmail sul messaggio giusto.' } }, required: ['riassunto','mittente','oggetto'] } } }, required: ['email'] } },
   { name: 'dayly_applica_modifiche', description: 'Applica in DAYLY le modifiche già mostrate all’utente solo dopo che ha scritto chiaramente che le conferma. Ripeti la frase di conferma nella motivazione; se non ha confermato, non chiamare questo strumento.', inputSchema: { type: 'object', properties: { motivazione: { type: 'string', description: 'Frase esplicita di conferma dell’utente nella conversazione corrente.' }, modifiche: { type: 'array', items: { type: 'object', properties: { tipo: { type: 'string', enum: ['aggiungi_attivita','sposta_attivita','aggiorna_progresso','completa_attivita'] }, titolo: { type: 'string' }, data: { type: 'string' }, ora: { type: 'string' }, progetto: { type: 'string' }, progresso: { type: 'number' } }, required: ['tipo'] } } }, required: ['motivazione','modifiche'] } },
 ]
 
@@ -118,33 +120,39 @@ export default async function handler(request, response) {
     })))
   }
   if (name === 'dayly_segnala_email') {
-    const incoming = (Array.isArray(args.email) ? args.email : []).slice(0, 10)
+    const incoming = (Array.isArray(args.email) ? args.email : []).slice(0, MAIL_IN_VIEW)
     const nota = typeof args.nota === 'string' ? args.nota.slice(0, 300) : ''
     const reported = incoming.map(item => ({
+      riassunto: line(item.riassunto, 400),
       mittente: line(item.mittente, 120),
       oggetto: line(item.oggetto, 200),
       motivo: line(item.motivo, 300),
       ricevuta: isDay(item.ricevuta) ? item.ricevuta : '',
       scadenza: isDay(item.scadenza) ? item.scadenza : '',
       link: isLink(item.link) ? item.link.slice(0, 500) : '',
-    })).filter(item => item.mittente && item.oggetto && item.motivo)
-    if (!reported.length) return response.status(200).json(success(id, { ...text('Serve almeno una email con mittente, oggetto e motivo.'), isError: true }))
+    })).filter(item => item.riassunto && item.mittente && item.oggetto)
+    if (!reported.length) return response.status(200).json(success(id, { ...text('Serve almeno una email con riassunto, mittente e oggetto.'), isError: true }))
     const now = Date.now()
     let mailbox = []
     try { mailbox = await readMailbox(user) } catch { return response.status(200).json(success(id, { ...text('Non sono riuscito ad aprire la casella DAYLY.'), isError: true })) }
-    const merged = mailbox.filter(item => now - Number(item.createdAt || 0) < WEEK)
+    // l'archivio resta finché l'utente non lo svuota dall'app; in vista tengo
+    // solo i riassunti freschi, e una email risegnalata torna in vista
+    const archived = mailbox.filter(item => item.stato === 'archiviata')
+    let live = mailbox.filter(item => item.stato !== 'archiviata' && now - Number(item.createdAt || 0) < WEEK)
     for (const mail of reported) {
-      const existing = merged.findIndex(item => sameMail(item, mail))
-      const record = { id: existing >= 0 ? merged[existing].id : randomBytes(8).toString('hex'), createdAt: now, nota, ...mail }
-      if (existing >= 0) merged[existing] = record
-      else merged.push(record)
+      const previous = live.find(item => sameMail(item, mail)) || archived.find(item => sameMail(item, mail))
+      const mailId = previous?.id || randomBytes(8).toString('hex')
+      live = live.filter(item => item.id !== mailId)
+      const buried = archived.findIndex(item => item.id === mailId)
+      if (buried >= 0) archived.splice(buried, 1)
+      live.push({ id: mailId, createdAt: now, nota, stato: 'nuova', ...mail })
     }
-    try { await writeMailbox(user, merged.slice(-20)) }
+    try { await writeMailbox(user, [...archived.slice(-MAIL_ARCHIVED), ...live.slice(-MAIL_IN_VIEW)]) }
     catch { return response.status(200).json(success(id, { ...text('Non sono riuscito a consegnare le email a DAYLY.'), isError: true })) }
     return response.status(200).json(success(id, text({
-      stato: 'Email consegnate a DAYLY. Nessun dato è stato modificato.',
+      stato: 'Riassunti consegnati a DAYLY. Nessun dato è stato modificato.',
       consegnate: reported.length,
-      messaggio: 'Di’ all’utente che le trova in DAYLY, dove le apre nella posta, le trasforma in attività o le archivia. Non rielencarle in chat.',
+      messaggio: 'Di’ all’utente che i riassunti lo aspettano in DAYLY, dove apre l’email in Gmail, la trasforma in attività o la archivia. Non rielencarli in chat.',
     })))
   }
   if (name === 'dayly_applica_modifiche') {
