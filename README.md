@@ -9,6 +9,7 @@ DAYLY è un’agenda personale in italiano, pensata prima di tutto per iPhone. S
 - **Progetti e obiettivi:** percentuale di completamento aggiornata manualmente.
 - **Note:** idee da riprendere e riepiloghi (bilancio della sera, focus della settimana) in un’unica sezione a due schede.
 - **Offline:** le funzioni locali continuano a funzionare senza rete.
+- **Suoni:** un tocco, un salvataggio e un’attività completata hanno un suono breve, generato con Web Audio (nessun file da scaricare). Si spengono dall’interruttore in Impostazioni; la scelta resta in `localStorage`.
 - **Backup:** esportazione e ripristino di un file JSON.
 - **Scrivere la giornata:** il pulsante centrale con la matita apre un foglio dove si scrive in italiano, anche più cose insieme («oggi la spesa, chiamare Marco, domani alle 15 il dentista»). DAYLY riconosce date, orari, priorità e progetti, e la data citata vale anche per le cose che la seguono. Mostra l’anteprima e inserisce solo dopo conferma. Funziona offline e non chiama nessun servizio.
 - **Toccare una voce** apre le sue azioni: segnarla fatta, renderla una priorità, spostarla a domani, eliminarla. Il cerchio a destra la spunta direttamente.

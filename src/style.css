@@ -38,7 +38,21 @@
 }
 
 * { box-sizing: border-box; }
-body { margin: 0; min-width: 320px; background: var(--bg); }
+
+/* Niente zoom col doppio tocco: su iPhone ingrandiva la pagina e la
+   lasciava storta. «manipulation» toglie solo quello, il pizzico resta. */
+html {
+  touch-action: manipulation;
+  -webkit-text-size-adjust: 100%;
+}
+body {
+  margin: 0;
+  min-width: 320px;
+  background: var(--bg);
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior-y: none;
+}
+button, .chip, .strip-day, .row-main { -webkit-user-select: none; user-select: none; }
 button, input, textarea, select { font: inherit; }
 button { color: inherit; cursor: pointer; border: 0; background: none; padding: 0; }
 h1, h2, h3, p { margin: 0; }
@@ -121,6 +135,7 @@ h1, h2, h3, p { margin: 0; }
 .scroll {
   flex: 1;
   overflow-y: auto;
+  overscroll-behavior-y: contain;
   padding: 6px 18px calc(env(safe-area-inset-bottom) + 118px);
   -webkit-overflow-scrolling: touch;
 }
@@ -1118,3 +1133,28 @@ h1, h2, h3, p { margin: 0; }
 .capture-unread span { display: block; opacity: .85; }
 
 .sheet-link.danger-link strong { color: var(--rose); }
+
+
+/* interruttore dei suoni */
+.switch {
+  width: 50px;
+  height: 30px;
+  flex: none;
+  border-radius: 99px;
+  background: var(--line);
+  padding: 3px;
+  display: flex;
+  justify-content: flex-start;
+  transition: background .2s ease;
+}
+.switch.on { background: var(--violet); justify-content: flex-end; }
+.switch i {
+  display: block;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: var(--shadow-soft);
+  transition: transform .2s ease;
+}
+.switch:active i { transform: scale(.9); }

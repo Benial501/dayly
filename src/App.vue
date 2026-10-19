@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { ArrowDownToLine, ArrowLeft, Compass, NotebookPen, ArrowRight, PenLine, RefreshCw, Sparkles, CalendarDays, Check, CheckCircle2, ChevronRight, Clock3, CloudOff, Flag, Lightbulb, ListTodo, MessageCircle, Moon, Plus, Settings2, Sun, Target, Trash2, Upload, X } from 'lucide-vue-next'
 import { readAll, put, remove, replaceAll } from './db'
+import { sound } from './sound'
 
 const section = ref('today')
 const state = ref({ tasks: [], projects: [], ideas: [], reviews: [], settings: [] })
@@ -38,7 +39,27 @@ const lastReview = computed(() => state.value.reviews.find(item => item.period =
 const weekTasks = computed(() => state.value.tasks.filter(task => weekDays.value.some(day => keyDate(day) === task.date)))
 const projectProgress = computed(() => state.value.projects.length ? Math.round(state.value.projects.reduce((sum, p) => sum + Number(p.progress || 0), 0) / state.value.projects.length) : 0)
 
-onMounted(async () => { await loadInitialState(); loading.value = false })
+const soundOn = ref(sound.enabled)
+function switchSound() { sound.enabled = !soundOn.value; soundOn.value = sound.enabled }
+
+onMounted(async () => {
+  // un tocco qualsiasi fa un suono: così non devo toccare ogni singolo pulsante
+  document.addEventListener('pointerdown', event => {
+    if (event.target.closest('button')) sound.tap()
+  }, { capture: true, passive: true })
+
+  const opened = Date.now()
+  await loadInitialState()
+  loading.value = false
+  // la schermata d'apertura resta almeno mezzo secondo, altrimenti è un lampo
+  const splash = document.getElementById('splash')
+  if (splash) {
+    window.setTimeout(() => {
+      splash.classList.add('is-gone')
+      window.setTimeout(() => splash.remove(), 500)
+    }, Math.max(0, 520 - (Date.now() - opened)))
+  }
+})
 
 function keyDate(date) { return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}` }
 function newId() { return crypto.randomUUID() }
@@ -171,7 +192,12 @@ async function disconnectClaude() {
   ping('Collegamento Claude revocato')
 }
 function switchTo(id) { section.value = id }
-function ping(message) { toast.value = message; window.setTimeout(() => { toast.value = '' }, 2600) }
+function ping(message, tone = 'saved') {
+  toast.value = message
+  if (tone === 'saved') sound.saved()
+  else if (tone === 'removed') sound.removed()
+  window.setTimeout(() => { toast.value = '' }, 2600)
+}
 function beginAdd(type, extra = {}) {
   form.value = { title: '', date: todayKey, time: '', priority: false, done: false, progress: 0, color: '#E8E5FF', notes: '', ...extra }
   modal.value = type
@@ -188,8 +214,12 @@ async function saveForm() {
   if (type === 'idea') await put('ideas', { ...form.value, id: newId(), title: form.value.title.trim(), createdAt: Date.now() })
   await refreshAndSync(); modal.value = null; ping('Aggiunto ai tuoi spazi')
 }
-async function toggleTask(task) { await put('tasks', { ...task, done: !task.done }); await refreshAndSync() }
-async function deleteItem(store, item) { await remove(store, item.id); await refreshAndSync(); ping('Elemento eliminato') }
+async function toggleTask(task) {
+  if (!task.done) sound.done()
+  await put('tasks', { ...task, done: !task.done })
+  await refreshAndSync()
+}
+async function deleteItem(store, item) { await remove(store, item.id); await refreshAndSync(); ping('Elemento eliminato', 'removed') }
 async function setProgress(project, value) { await put('projects', { ...project, progress: Number(value) }); await refreshAndSync() }
 function tasksOn(date) { return state.value.tasks.filter(task => task.date === keyDate(date)).sort((a, b) => (a.time || '99:99').localeCompare(b.time || '99:99')) }
 function formatTime(value) { return value ? new Intl.DateTimeFormat('it-IT', { hour: '2-digit', minute: '2-digit' }).format(new Date(`2000-01-01T${value}:00`)) : '' }
@@ -449,7 +479,7 @@ async function deleteTask(task) {
   await remove('tasks', task.id)
   taskSheet.value = null
   await refreshAndSync()
-  ping('Attività eliminata')
+  ping('Attività eliminata', 'removed')
 }
 
 /* ── proposte arrivate da Claude tramite il connettore ── */
@@ -509,7 +539,7 @@ async function dismissPending() {
   const sources = pendingSource.value.slice()
   pending.value = []
   pendingSource.value = []
-  if (sources.length) { await clearProposals(sources); ping('Proposte rifiutate') }
+  if (sources.length) { await clearProposals(sources); ping('Proposte rifiutate', 'removed') }
 }
 
 /* ── anteprima condivisa: cattura veloce e proposte di Claude ── */
@@ -859,6 +889,13 @@ function openCapture() {
             <p class="date-line">I tuoi dati, sempre tuoi</p>
             <h1 class="page-title">Impostazioni</h1>
           </div>
+
+          <section class="card">
+            <div class="card-head">
+              <h2>Suoni<span class="head-sub">{{ soundOn ? 'Un tocco e una conferma li senti' : 'Tutto in silenzio' }}</span></h2>
+              <button class="switch" :class="{ on: soundOn }" role="switch" :aria-checked="soundOn" aria-label="Suoni" @click="switchSound"><i></i></button>
+            </div>
+          </section>
 
           <section class="card">
             <div class="card-head"><h2>Backup<span class="head-sub">Attività, progetti, idee e riflessioni stanno su questo dispositivo</span></h2></div>
